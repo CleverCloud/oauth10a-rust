@@ -1,0 +1,59 @@
+[package]
+name = "oauth10a"
+description = "A rust implementation of the oauth 1.0a protocol fully-async with logging, metrics and tracing facilities"
+version = "1.0.0"
+edition = "2018"
+authors = ["Florentin Dubois <florentin.dubois@clever-cloud.com>"]
+license-file = "LICENSE"
+readme = "README.md"
+keywords = [
+    "clevercloud",
+    "client",
+    "logging",
+    "metrics",
+    "oauth1a",
+]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = { version = "^0.1.51", optional = true }
+base64 = { version = "^0.13.0", optional = true }
+bytes = { version = "^1.1.0", features = ["serde"], optional = true }
+hmac = { version = "^0.11.0", features = ["std"], optional = true }
+hyper = { version = "^0.14.13", default-features = false, optional = true }
+hyper-tls = { version = "^0.5.0", optional = true }
+lazy_static = { version = "^1.4.0", optional = true }
+log = { version = "^0.4.14", optional = true }
+prometheus = { version = "^0.13.0", optional = true }
+serde = { version = "^1.0.130", features = ["derive"], optional = true }
+serde_json = { version = "^1.0.68", features = [
+    "preserve_order",
+    "float_roundtrip",
+], optional = true }
+sha2 = { version = "^0.9.6", optional = true }
+thiserror = { version = "^1.0.29", optional = true }
+urlencoding = { version = "^2.1.0", optional = true }
+uuid = { version = "^0.8.2", features = ["serde", "v4"], optional = true }
+
+[features]
+default = ["client", "logging"]
+client = [
+    "async-trait",
+    "base64",
+    "bytes",
+    "hmac",
+    "hyper",
+    "hyper/client",
+    "hyper/tcp",
+    "hyper/http1",
+    "hyper-tls",
+    "serde",
+    "serde_json",
+    "sha2",
+    "thiserror",
+    "urlencoding",
+    "uuid",
+]
+logging = ["log"]
+metrics = ["lazy_static", "prometheus"]
