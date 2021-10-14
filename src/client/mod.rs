@@ -10,7 +10,7 @@ use std::{
     collections::BTreeMap,
     convert::TryFrom,
     error::Error,
-    fmt::{self, Display, Formatter},
+    fmt::{self, Debug, Display, Formatter},
     time::{SystemTime, SystemTimeError},
 };
 
@@ -70,35 +70,38 @@ pub trait Request {
         payload: &T,
     ) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync;
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync;
 }
 
 // -----------------------------------------------------------------------------
 // RestClient trait
 
 #[async_trait]
-pub trait RestClient {
+pub trait RestClient
+where
+    Self: Debug,
+{
     type Error;
 
     async fn get<T>(&self, endpoint: &str) -> Result<T, Self::Error>
     where
-        T: DeserializeOwned + Send + Sync;
+        T: DeserializeOwned + Debug + Send + Sync;
 
     async fn post<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync;
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync;
 
     async fn put<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync;
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync;
 
     async fn patch<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync;
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync;
 
     async fn delete(&self, endpoint: &str) -> Result<(), Self::Error>;
 }
@@ -127,7 +130,10 @@ pub const OAUTH1_VERSION: &str = "oauth_version";
 pub const OAUTH1_VERSION_1: &str = "1.0";
 pub const OAUTH1_TOKEN: &str = "oauth_token";
 
-pub trait OAuth1 {
+pub trait OAuth1
+where
+    Self: Debug,
+{
     type Error;
 
     // `params` returns OAuth1 parameters without the signature one
@@ -139,6 +145,7 @@ pub trait OAuth1 {
     // `signing_key` returns the key that is used to signed the signature
     fn signing_key(&self) -> String;
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     // `sign` returns OAuth1 formatted Authorization header value
     fn sign(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
         let signature = self.signature(method, endpoint)?;
@@ -171,7 +178,7 @@ pub struct ResponseError {
 }
 
 impl Display for ResponseError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
             "got response {} {}, {}",
@@ -208,6 +215,7 @@ pub struct Signer {
 impl OAuth1 for Signer {
     type Error = SignerError;
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn params(&self) -> BTreeMap<String, String> {
         let mut params = BTreeMap::new();
 
@@ -226,6 +234,7 @@ impl OAuth1 for Signer {
         params
     }
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn signing_key(&self) -> String {
         format!(
             "{}&{}",
@@ -234,6 +243,7 @@ impl OAuth1 for Signer {
         )
     }
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
         let (host, query) = match endpoint.find(|c| '?' == c) {
             None => (endpoint, ""),
@@ -283,6 +293,7 @@ impl OAuth1 for Signer {
 impl TryFrom<Credentials> for Signer {
     type Error = SignerError;
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn try_from(credentials: Credentials) -> Result<Self, Self::Error> {
         let nonce = Uuid::new_v4().to_string();
         let timestamp = SystemTime::now()
@@ -334,6 +345,7 @@ pub struct Client {
 impl Request for Client {
     type Error = ClientError;
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     async fn request<T, U>(
         &self,
         method: &Method,
@@ -341,8 +353,8 @@ impl Request for Client {
         payload: &T,
     ) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync,
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync,
     {
         let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
         let mut builder = hyper::Request::builder();
@@ -426,9 +438,10 @@ impl Request for Client {
 impl RestClient for Client {
     type Error = ClientError;
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     async fn get<T>(&self, endpoint: &str) -> Result<T, Self::Error>
     where
-        T: DeserializeOwned + Send + Sync,
+        T: DeserializeOwned + Debug + Send + Sync,
     {
         let method = &Method::GET;
         let mut builder = hyper::Request::builder();
@@ -506,30 +519,34 @@ impl RestClient for Client {
         Ok(serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?)
     }
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     async fn post<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync,
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync,
     {
         self.request(&Method::POST, endpoint, payload).await
     }
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     async fn put<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync,
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync,
     {
         self.request(&Method::PUT, endpoint, payload).await
     }
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     async fn patch<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Send + Sync,
-        U: DeserializeOwned + Send + Sync,
+        T: Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync,
     {
         self.request(&Method::PATCH, endpoint, payload).await
     }
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     async fn delete(&self, endpoint: &str) -> Result<(), Self::Error> {
         let method = &Method::DELETE;
         let mut builder = hyper::Request::builder();
@@ -609,6 +626,7 @@ impl RestClient for Client {
 }
 
 impl Default for Client {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn default() -> Self {
         let connector = HttpsConnector::new();
         let inner = hyper::Client::builder().build(connector);
@@ -621,6 +639,7 @@ impl Default for Client {
 }
 
 impl From<Credentials> for Client {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn from(credentials: Credentials) -> Self {
         let mut client = Self::default();
         client.set_credentials(Some(credentials));
@@ -629,6 +648,7 @@ impl From<Credentials> for Client {
 }
 
 impl Client {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn set_credentials(&mut self, credentials: Option<Credentials>) {
         self.credentials = credentials;
     }

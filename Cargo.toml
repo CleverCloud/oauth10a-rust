@@ -33,6 +33,8 @@ serde_json = { version = "^1.0.68", features = [
 ], optional = true }
 sha2 = { version = "^0.9.6", optional = true }
 thiserror = { version = "^1.0.29", optional = true }
+tracing = { version = "^0.1.29", optional = true }
+tracing-futures = { version = "^0.2.5", optional = true }
 urlencoding = { version = "^2.1.0", optional = true }
 uuid = { version = "^0.8.2", features = ["serde", "v4"], optional = true }
 
@@ -55,5 +57,7 @@ client = [
     "urlencoding",
     "uuid",
 ]
-logging = ["log"]
+logging = ["log", "tracing/log-always"]
+trace = ["tracing", "tracing-futures"]
+tokio = ["tracing-futures/tokio"]
 metrics = ["lazy_static", "prometheus"]
