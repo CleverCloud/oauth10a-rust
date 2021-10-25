@@ -6,14 +6,15 @@
 
 ## Status
 
-This crate is under development, you can use it, but it may have bugs or unimplemented features.
+This crate is ready for production, if you may have bugs, so please an issue to
+fix the trouble.
 
 ## Installation
 
 To install this dependency, just add the following line to your `Cargo.toml` manifest.
 
 ```toml
-oauth10a = { version = "^1.1.0", features = ["metrics"] }
+oauth10a = { version = "^1.2.0", features = ["metrics"] }
 ```
 
 ## Usage
