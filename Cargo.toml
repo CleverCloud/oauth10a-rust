@@ -21,18 +21,18 @@ async-trait = { version = "^0.1.51", optional = true }
 base64 = { version = "^0.13.0", optional = true }
 bytes = { version = "^1.1.0", features = ["serde"], optional = true }
 hmac = { version = "^0.11.0", features = ["std"], optional = true }
-hyper = { version = "^0.14.13", default-features = false, optional = true }
+hyper = { version = "^0.14.15", default-features = false, optional = true }
 hyper-tls = { version = "^0.5.0", optional = true }
 lazy_static = { version = "^1.4.0", optional = true }
 log = { version = "^0.4.14", optional = true }
 prometheus = { version = "^0.13.0", optional = true }
 serde = { version = "^1.0.130", features = ["derive"], optional = true }
-serde_json = { version = "^1.0.68", features = [
+serde_json = { version = "^1.0.71", features = [
     "preserve_order",
     "float_roundtrip",
 ], optional = true }
-sha2 = { version = "^0.9.6", optional = true }
-thiserror = { version = "^1.0.29", optional = true }
+sha2 = { version = "^0.9.8", optional = true }
+thiserror = { version = "^1.0.30", optional = true }
 tracing = { version = "^0.1.29", optional = true }
 tracing-futures = { version = "^0.2.5", optional = true }
 urlencoding = { version = "^2.1.0", optional = true }
