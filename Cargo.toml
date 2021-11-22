@@ -3,9 +3,11 @@ name = "oauth10a"
 description = "A rust implementation of the oauth 1.0a protocol fully-async with logging, metrics and tracing facilities"
 version = "1.2.1"
 edition = "2021"
+rust-version = "1.56"
 authors = ["Florentin Dubois <florentin.dubois@clever-cloud.com>"]
 license-file = "LICENSE"
 readme = "README.md"
+repository = "https://github.com/CleverCloud/oauth10a-rust"
 keywords = [
     "clevercloud",
     "client",
