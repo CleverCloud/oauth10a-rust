@@ -16,7 +16,8 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Buf;
-use hmac::{crypto_mac::InvalidKeyLength, Hmac, Mac, NewMac};
+use crypto_common::InvalidLength;
+use hmac::{Hmac, Mac};
 use hyper::{
     client::{connect::dns::GaiResolver, HttpConnector},
     header, Body, Method, StatusCode,
@@ -195,7 +196,7 @@ impl Error for ResponseError {}
 #[derive(thiserror::Error, Debug)]
 pub enum SignerError {
     #[error("failed to compute invalid key length, {0}")]
-    Digest(InvalidKeyLength),
+    Digest(InvalidLength),
     #[error("failed to compute time since unix epoch, {0}")]
     UnixEpochTime(SystemTimeError),
     #[error("failed to parse signature paramater, {0}")]
