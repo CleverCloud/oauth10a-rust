@@ -19,7 +19,10 @@ use bytes::Buf;
 use crypto_common::InvalidLength;
 use hmac::{Hmac, Mac};
 use hyper::{
-    client::{connect::dns::GaiResolver, HttpConnector},
+    client::{
+        connect::{dns::GaiResolver, Connect},
+        HttpConnector,
+    },
     header, Body, Method, StatusCode,
 };
 use hyper_tls::HttpsConnector;
@@ -337,13 +340,19 @@ pub enum ClientError {
 // Client structure
 
 #[derive(Clone, Debug)]
-pub struct Client {
-    inner: hyper::Client<HttpsConnector<HttpConnector<GaiResolver>>, Body>,
+pub struct Client<C>
+where
+    C: Connect + Clone + Debug + Send + Sync + 'static,
+{
+    inner: hyper::Client<C, Body>,
     credentials: Option<Credentials>,
 }
 
 #[async_trait]
-impl Request for Client {
+impl<C> Request for Client<C>
+where
+    C: Connect + Clone + Debug + Send + Sync + 'static,
+{
     type Error = ClientError;
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -436,7 +445,10 @@ impl Request for Client {
 }
 
 #[async_trait]
-impl RestClient for Client {
+impl<C> RestClient for Client<C>
+where
+    C: Connect + Clone + Debug + Send + Sync + 'static,
+{
     type Error = ClientError;
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -626,29 +638,41 @@ impl RestClient for Client {
     }
 }
 
-impl Default for Client {
+impl Default for Client<HttpsConnector<HttpConnector<GaiResolver>>> {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     fn default() -> Self {
-        let connector = HttpsConnector::new();
-        let inner = hyper::Client::builder().build(connector);
-
-        Self {
-            inner,
-            credentials: None,
-        }
+        Self::from(HttpsConnector::new())
     }
 }
 
-impl From<Credentials> for Client {
+impl From<Credentials> for Client<HttpsConnector<HttpConnector<GaiResolver>>> {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     fn from(credentials: Credentials) -> Self {
-        let mut client = Self::default();
-        client.set_credentials(Some(credentials));
-        client
+        Self::new(HttpsConnector::new(), Some(credentials))
     }
 }
 
-impl Client {
+impl<C> From<C> for Client<C>
+where
+    C: Connect + Clone + Debug + Send + Sync + 'static,
+{
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    fn from(connector: C) -> Self {
+        Self::new(connector, None)
+    }
+}
+
+impl<C> Client<C>
+where
+    C: Connect + Clone + Debug + Send + Sync + 'static,
+{
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    pub fn new(connector: C, credentials: Option<Credentials>) -> Self {
+        let inner = hyper::Client::builder().build(connector);
+
+        Self { inner, credentials }
+    }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn set_credentials(&mut self, credentials: Option<Credentials>) {
         self.credentials = credentials;
