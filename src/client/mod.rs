@@ -37,6 +37,8 @@ use sha2::Sha512;
 use uuid::Uuid;
 
 pub mod connector;
+#[cfg(feature = "proxy")]
+pub mod proxy;
 
 // -----------------------------------------------------------------------------
 // Telemetry

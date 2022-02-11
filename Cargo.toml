@@ -22,10 +22,13 @@ keywords = [
 async-trait = { version = "^0.1.52", optional = true }
 base64 = { version = "^0.13.0", optional = true }
 bytes = { version = "^1.1.0", features = ["serde"], optional = true }
+cidr = { version = "*", optional = true }
 crypto-common = { version = "^0.1.1", optional = true }
+headers = { version = "^0.3.6", optional = true }
 hmac = { version = "^0.12.0", features = ["std"], optional = true }
 hyper = { version = "^0.14.16", default-features = false, optional = true }
 hyper-tls = { version = "^0.5.0", optional = true }
+hyper-proxy = { version = "^0.9.1", default-features = false, features = ["tls"], optional = true }
 lazy_static = { version = "^1.4.0", optional = true }
 log = { version = "^0.4.14", optional = true }
 prometheus = { version = "^0.13.0", optional = true }
@@ -38,11 +41,12 @@ sha2 = { version = "^0.10.1", optional = true }
 thiserror = { version = "^1.0.30", optional = true }
 tracing = { version = "^0.1.29", optional = true }
 tracing-futures = { version = "^0.2.5", optional = true }
+url = { version = "^2.2.2", default-features = false, features = ["serde"], optional = true }
 urlencoding = { version = "^2.1.0", optional = true }
 uuid = { version = "^0.8.2", features = ["serde", "v4"], optional = true }
 
 [features]
-default = ["client", "logging"]
+default = ["client", "proxy", "logging"]
 client = [
     "async-trait",
     "base64",
@@ -65,3 +69,4 @@ logging = ["log", "tracing/log-always"]
 trace = ["tracing", "tracing-futures"]
 tokio = ["tracing-futures/tokio"]
 metrics = ["lazy_static", "prometheus"]
+proxy = ["cidr", "headers", "hyper-proxy", "url"]
