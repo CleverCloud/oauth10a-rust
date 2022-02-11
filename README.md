@@ -28,12 +28,15 @@ use oauth10a::client::{Client, Credentials, RestClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let client = Client::from(Credentials {
-        token: "".to_string(),
-        secret: "".to_string(),
-        consumer_key: "".to_string(),
-        consumer_secret: "".to_string(),
-    }));
+    let connector = ProxyConnectorBuilder::try_from_env()?;
+    let client = Client::builder()
+        .with_credentials(Credentials {
+            token: "".to_string(),
+            secret: "".to_string(),
+            consumer_key: "".to_string(),
+            consumer_secret: "".to_string(),
+        }))
+        .build(connector);
 
     let _obj: BtreeMap<String, String> = client.get("https://example.com/object.json").await?;
 
@@ -43,11 +46,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
 ## Features
 
-| name      | description                                                   |
-| --------- | ------------------------------------------------------------- |
-| client    | The oauth 1.0a client implementation                          |
-| logging   | Use the `log` facility crate to print logs                    |
-| metrics   | Use `lazy_static` and `prometheus` crates to register metrics |
+| name    | description                                                               |
+| ------- | ------------------------------------------------------------------------- |
+| default | Default enable features are `client`, `logging`, `proxy`                  |
+| client  | The oauth 1.0a client implementation                                      |
+| logging | Use the `log` facility crate to print logs                                |
+| metrics | Use `lazy_static` and `prometheus` crates to register metrics             |
+| proxy   | Enable the support of environment variable `http_proxy` and `https_proxy` |
 
 ### Metrics
 
