@@ -24,7 +24,7 @@ Below, you will find an example of executing a simple request to an api.
 ```rust
 use std::error::Error;
 
-use oauth10a::client::{Client, Credentials, RestClient};
+use oauth10a::client::{Client, Credentials, RestClient, proxy::ProxyConnectorBuilder};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
