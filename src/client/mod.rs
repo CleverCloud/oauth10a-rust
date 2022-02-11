@@ -36,6 +36,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::Sha512;
 use uuid::Uuid;
 
+pub mod connector;
+
 // -----------------------------------------------------------------------------
 // Telemetry
 
