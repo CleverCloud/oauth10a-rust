@@ -38,8 +38,8 @@ pub enum Error {
     InvalidBearerToken(InvalidBearerToken),
     #[error("failed to parse '{0}' as uri, ip address or cidr")]
     ParseDirect(String),
-    #[error("failed to parse '{0}' environment variable '{1}', {2}")]
-    ParseEnvironmentVariable(&'static str, String, url::ParseError),
+    #[error("failed to parse '{0}' as url, {1}")]
+    ParseUrl(String, url::ParseError),
 }
 
 // -----------------------------------------------------------------------------
@@ -240,14 +240,25 @@ impl ProxyBuilder {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn try_from_env() -> Result<Option<Proxy>, Error> {
         let url = if let Some(https_proxy) = Environment::https_proxy() {
-            Url::from_str(&https_proxy)
-                .map_err(|err| Error::ParseEnvironmentVariable("HTTPS_PROXY", https_proxy, err))?
+            https_proxy
         } else if let Some(http_proxy) = Environment::http_proxy() {
-            Url::from_str(&http_proxy)
-                .map_err(|err| Error::ParseEnvironmentVariable("HTTP_PROXY", http_proxy, err))?
+            http_proxy
         } else {
             return Ok(None);
         };
+
+        let directs = if let Some(no_proxy) = Environment::no_proxy() {
+            no_proxy.split(',').map(ToString::to_string).collect()
+        } else {
+            vec![]
+        };
+
+        Self::try_from(url, directs).map(Some)
+    }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    pub fn try_from(url: String, directs: Vec<String>) -> Result<Proxy, Error> {
+        let url = Url::from_str(&url).map_err(|err| Error::ParseUrl(url, err))?;
 
         let mut p_and_q = url.path().to_string();
         if let Some(q) = url.query() {
@@ -272,24 +283,13 @@ impl ProxyBuilder {
             .build()
             .map_err(Error::BuildUri)?;
 
-        let no_proxy = if let Some(no_proxy) = Environment::no_proxy() {
-            let mut acc = vec![];
-            for s in no_proxy.split(',').map(|s| s.trim()) {
-                acc.push(Direct::from_str(s)?)
-            }
-
-            acc
-        } else {
-            vec![]
-        };
-
         #[cfg(feature = "logging")]
         if log_enabled!(Level::Info) {
             info!("Create connector with proxy url '{}'", uri);
         }
 
         let mut builder = ProxyBuilder::new(uri.to_owned());
-        for direct in no_proxy {
+        for direct in directs {
             #[cfg(feature = "logging")]
             if log_enabled!(Level::Info) {
                 info!(
@@ -298,7 +298,7 @@ impl ProxyBuilder {
                 );
             }
 
-            builder = builder.with_direct(direct);
+            builder = builder.with_direct(Direct::from_str(&direct)?);
         }
 
         if let (username, Some(password)) = (url.username(), url.password()) {
@@ -313,7 +313,7 @@ impl ProxyBuilder {
             builder = builder.with_basic(username.to_string(), password.to_string());
         }
 
-        Ok(Some(builder.build()?))
+        builder.build()
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
