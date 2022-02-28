@@ -424,14 +424,14 @@ where
 
         #[cfg(feature = "metrics")]
         CLIENT_REQUEST
-            .with_label_values(&[endpoint, &method.to_string(), &status.as_u16().to_string()])
+            .with_label_values(&[endpoint, method.as_ref(), &status.as_u16().to_string()])
             .inc();
 
         #[cfg(feature = "metrics")]
         CLIENT_REQUEST_DURATION
             .with_label_values(&[
                 endpoint,
-                &method.to_string(),
+                method.as_ref(),
                 &status.as_u16().to_string(),
                 "us",
             ])
@@ -513,14 +513,14 @@ where
 
         #[cfg(feature = "metrics")]
         CLIENT_REQUEST
-            .with_label_values(&[endpoint, &method.to_string(), &status.as_u16().to_string()])
+            .with_label_values(&[endpoint, method.as_ref(), &status.as_u16().to_string()])
             .inc();
 
         #[cfg(feature = "metrics")]
         CLIENT_REQUEST_DURATION
             .with_label_values(&[
                 endpoint,
-                &method.to_string(),
+                method.as_ref(),
                 &status.as_u16().to_string(),
                 "us",
             ])
@@ -618,14 +618,14 @@ where
 
         #[cfg(feature = "metrics")]
         CLIENT_REQUEST
-            .with_label_values(&[endpoint, &method.to_string(), &status.as_u16().to_string()])
+            .with_label_values(&[endpoint, method.as_ref(), &status.as_u16().to_string()])
             .inc();
 
         #[cfg(feature = "metrics")]
         CLIENT_REQUEST_DURATION
             .with_label_values(&[
                 endpoint,
-                &method.to_string(),
+                method.as_ref(),
                 &status.as_u16().to_string(),
                 "us",
             ])
