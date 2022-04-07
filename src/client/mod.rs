@@ -343,6 +343,9 @@ pub enum ClientError {
 // -----------------------------------------------------------------------------
 // Client structure
 
+pub const APPLICATION_JSON: &str = "application/json";
+pub const UTF8: &str = "utf-8";
+
 #[derive(Clone, Debug)]
 pub struct Client<C>
 where
@@ -386,6 +389,13 @@ where
         let req = builder
             .method(method)
             .uri(endpoint)
+            .header(
+                header::CONTENT_TYPE,
+                &format!("{}; charset={}", APPLICATION_JSON, UTF8),
+            )
+            .header(header::CONTENT_LENGTH, &format!("{}", buf.len()))
+            .header(header::ACCEPT_CHARSET, UTF8)
+            .header(header::ACCEPT, APPLICATION_JSON)
             .body(Body::from(buf.to_owned()))
             .map_err(ClientError::RequestBuilder)?;
 
@@ -475,6 +485,8 @@ where
 
         let req = builder
             .method(method)
+            .header(header::ACCEPT_CHARSET, UTF8)
+            .header(header::ACCEPT, APPLICATION_JSON)
             .uri(endpoint)
             .body(Body::empty())
             .map_err(ClientError::RequestBuilder)?;
