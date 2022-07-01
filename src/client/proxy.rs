@@ -4,7 +4,7 @@
 //! with proxy capabilities
 
 use std::{
-    fmt::{self, Debug, Display, Formatter},
+    fmt::{self, Debug, Display, Formatter, Write},
     marker::PhantomData,
     net::IpAddr,
     str::FromStr,
@@ -40,6 +40,8 @@ pub enum Error {
     ParseDirect(String),
     #[error("failed to parse '{0}' as url, {1}")]
     ParseUrl(String, url::ParseError),
+    #[error("failed to format query params in url, {0}")]
+    FormatUrl(fmt::Error),
 }
 
 // -----------------------------------------------------------------------------
@@ -262,7 +264,7 @@ impl ProxyBuilder {
 
         let mut p_and_q = url.path().to_string();
         if let Some(q) = url.query() {
-            p_and_q += &format!("?{}", q);
+            write!(p_and_q, "?{}", q).map_err(Error::FormatUrl)?;
         }
 
         let uri = Uri::builder()
