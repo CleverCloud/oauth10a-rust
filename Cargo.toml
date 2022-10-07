@@ -32,14 +32,14 @@ hyper-proxy = { version = "^0.9.1", default-features = false, features = ["tls"]
 lazy_static = { version = "^1.4.0", optional = true }
 log = { version = "^0.4.17", optional = true }
 prometheus = { version = "^0.13.2", optional = true }
-serde = { version = "^1.0.144", features = ["derive"], optional = true }
+serde = { version = "^1.0.145", features = ["derive"], optional = true }
 serde_json = { version = "^1.0.85", features = [
     "preserve_order",
     "float_roundtrip",
 ], optional = true }
-sha2 = { version = "^0.10.5", optional = true }
-thiserror = { version = "^1.0.34", optional = true }
-tracing = { version = "^0.1.36", optional = true }
+sha2 = { version = "^0.10.6", optional = true }
+thiserror = { version = "^1.0.37", optional = true }
+tracing = { version = "^0.1.37", optional = true }
 tracing-futures = { version = "^0.2.5", optional = true }
 url = { version = "^2.3.1", default-features = false, features = ["serde"], optional = true }
 urlencoding = { version = "^2.1.2", optional = true }
