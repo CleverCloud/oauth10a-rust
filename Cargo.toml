@@ -1,7 +1,7 @@
 [package]
 name = "oauth10a"
 description = "A rust implementation of the oauth 1.0a protocol fully-async with logging, metrics and tracing facilities"
-version = "1.3.13"
+version = "1.3.14"
 edition = "2021"
 rust-version = "1.60.0"
 authors = ["Florentin Dubois <florentin.dubois@clever-cloud.com>"]
