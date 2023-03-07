@@ -15,6 +15,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
 use bytes::Buf;
 use crypto_common::InvalidLength;
 use hmac::{Hmac, Mac};
@@ -243,15 +244,6 @@ impl OAuth1 for Signer {
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    fn signing_key(&self) -> String {
-        format!(
-            "{}&{}",
-            urlencoding::encode(&self.credentials.consumer_secret.to_owned()),
-            urlencoding::encode(&self.credentials.secret.to_owned())
-        )
-    }
-
-    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
         let (host, query) = match endpoint.find(|c| '?' == c) {
             None => (endpoint, ""),
@@ -294,7 +286,16 @@ impl OAuth1 for Signer {
         hasher.update(base.as_bytes());
 
         let digest = hasher.finalize().into_bytes();
-        Ok(base64::encode(digest.as_slice()))
+        Ok(BASE64_ENGINE.encode(digest.as_slice()))
+    }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    fn signing_key(&self) -> String {
+        format!(
+            "{}&{}",
+            urlencoding::encode(&self.credentials.consumer_secret.to_owned()),
+            urlencoding::encode(&self.credentials.secret.to_owned())
+        )
     }
 }
 
