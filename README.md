@@ -14,7 +14,7 @@ fix the trouble.
 To install this dependency, just add the following line to your `Cargo.toml` manifest.
 
 ```toml
-oauth10a = { version = "^1.3.14", features = ["metrics"] }
+oauth10a = { version = "^1.3.17", features = ["metrics"] }
 ```
 
 ## Usage
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             secret: "".to_string(),
             consumer_key: "".to_string(),
             consumer_secret: "".to_string(),
-        }))
+        })
         .build(connector);
 
     let _obj: BtreeMap<String, String> = client.get("https://example.com/object.json").await?;
