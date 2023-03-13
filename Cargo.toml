@@ -29,7 +29,7 @@ hmac = { version = "^0.12.1", features = ["std"], optional = true }
 hyper = { version = "^0.14.25", default-features = false, optional = true }
 hyper-tls = { version = "^0.5.0", optional = true }
 hyper-proxy = { version = "^0.9.1", default-features = false, features = ["tls"], optional = true }
-lazy_static = { version = "^1.4.0", optional = true }
+once_cell = { version = "^1.17.1", optional = true }
 log = { version = "^0.4.17", optional = true }
 prometheus = { version = "^0.13.3", optional = true }
 serde = { version = "^1.0.155", features = ["derive"], optional = true }
@@ -68,5 +68,5 @@ client = [
 logging = ["log", "tracing/log-always"]
 trace = ["tracing", "tracing-futures"]
 tokio = ["tracing-futures/tokio"]
-metrics = ["lazy_static", "prometheus"]
+metrics = ["once_cell", "prometheus"]
 proxy = ["cidr", "headers", "hyper-proxy", "url"]

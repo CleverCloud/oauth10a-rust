@@ -47,11 +47,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 ## Features
 
 | name    | description                                                               |
-| ------- | ------------------------------------------------------------------------- |
+| ------- |---------------------------------------------------------------------------|
 | default | Default enable features are `client`, `logging`, `proxy`                  |
 | client  | The oauth 1.0a client implementation                                      |
 | logging | Use the `log` facility crate to print logs                                |
-| metrics | Use `lazy_static` and `prometheus` crates to register metrics             |
+| metrics | Use `once_cell` and `prometheus` crates to register metrics               |
 | proxy   | Enable the support of environment variable `http_proxy` and `https_proxy` |
 
 ### Metrics

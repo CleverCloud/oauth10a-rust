@@ -27,10 +27,10 @@ use hyper::{
     header, Body, Method, StatusCode,
 };
 use hyper_tls::HttpsConnector;
-#[cfg(feature = "metrics")]
-use lazy_static::lazy_static;
 #[cfg(feature = "logging")]
 use log::{error, log_enabled, trace, Level};
+#[cfg(feature = "metrics")]
+use once_cell::sync::Lazy;
 #[cfg(feature = "metrics")]
 use prometheus::{opts, register_counter_vec, CounterVec};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -45,21 +45,25 @@ pub mod proxy;
 // Telemetry
 
 #[cfg(feature = "metrics")]
-lazy_static! {
-    static ref CLIENT_REQUEST: CounterVec = register_counter_vec!(
+static CLIENT_REQUEST: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
         opts!("oauth10a_client_request", "number of request on api"),
         &["endpoint", "method", "status"]
     )
-    .expect("metrics 'oauth10a_client_request' to not be initialized");
-    static ref CLIENT_REQUEST_DURATION: CounterVec = register_counter_vec!(
+    .expect("metrics 'oauth10a_client_request' to not be initialized")
+});
+
+#[cfg(feature = "metrics")]
+static CLIENT_REQUEST_DURATION: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
         opts!(
             "oauth10a_client_request_duration",
             "duration of request on api"
         ),
         &["endpoint", "method", "status", "unit"]
     )
-    .expect("metrics 'oauth10a_client_request_duration' to not be initialized");
-}
+    .expect("metrics 'oauth10a_client_request_duration' to not be initialized")
+});
 
 // -----------------------------------------------------------------------------
 // Types
