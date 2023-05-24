@@ -14,7 +14,7 @@ fix the trouble.
 To install this dependency, just add the following line to your `Cargo.toml` manifest.
 
 ```toml
-oauth10a = { version = "^1.3.19", features = ["metrics"] }
+oauth10a = { version = "^1.4.0", features = ["metrics"] }
 ```
 
 ## Usage
