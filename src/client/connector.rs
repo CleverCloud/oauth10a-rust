@@ -8,4 +8,4 @@ pub use hyper::client::{
 };
 #[cfg(feature = "proxy")]
 pub use hyper_proxy::ProxyConnector;
-pub use hyper_tls::HttpsConnector;
+pub use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
