@@ -26,7 +26,7 @@ use hyper::{
     },
     header, Body, Method, StatusCode,
 };
-use hyper_tls::HttpsConnector;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 #[cfg(feature = "logging")]
 use log::{error, log_enabled, trace, Level};
 #[cfg(feature = "metrics")]
@@ -662,14 +662,28 @@ where
 impl Default for Client<HttpsConnector<HttpConnector<GaiResolver>>> {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     fn default() -> Self {
-        Self::from(HttpsConnector::new())
+        Self::new(
+            HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+            None,
+        )
     }
 }
 
 impl From<Credentials> for Client<HttpsConnector<HttpConnector<GaiResolver>>> {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     fn from(credentials: Credentials) -> Self {
-        Self::new(HttpsConnector::new(), Some(credentials))
+        Self::new(
+            HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+            Some(credentials),
+        )
     }
 }
 

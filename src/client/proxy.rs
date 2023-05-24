@@ -20,7 +20,7 @@ use hyper::{
     Uri,
 };
 use hyper_proxy::{Custom, Intercept, Proxy, ProxyConnector};
-use hyper_tls::HttpsConnector;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 #[cfg(feature = "logging")]
 use log::{debug, info, log_enabled, trace, Level};
 use url::Url;
@@ -437,7 +437,13 @@ impl ProxyConnectorBuilder<HttpsConnector<HttpConnector<GaiResolver>>> {
             builder = builder.with_proxy(proxy);
         }
 
-        builder.build(HttpsConnector::new())
+        builder.build(
+            HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+        )
     }
 }
 
