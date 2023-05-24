@@ -712,4 +712,9 @@ where
     pub fn set_credentials(&mut self, credentials: Option<Credentials>) {
         self.credentials = credentials;
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    pub fn inner(&self) -> &hyper::Client<C> {
+        &self.inner
+    }
 }
