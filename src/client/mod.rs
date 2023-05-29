@@ -24,7 +24,8 @@ use hyper::{
         connect::{dns::GaiResolver, Connect},
         HttpConnector,
     },
-    header, Body, Method, StatusCode,
+    header::{self, InvalidHeaderValue},
+    Body, Method, Response, StatusCode,
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 #[cfg(feature = "logging")]
@@ -85,6 +86,8 @@ pub trait Request {
     where
         T: Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
+
+    async fn execute(&self, request: hyper::Request<Body>) -> Result<Response<Body>, Self::Error>;
 }
 
 // -----------------------------------------------------------------------------
@@ -211,7 +214,7 @@ pub enum SignerError {
     Digest(InvalidLength),
     #[error("failed to compute time since unix epoch, {0}")]
     UnixEpochTime(SystemTimeError),
-    #[error("failed to parse signature paramater, {0}")]
+    #[error("failed to parse signature parameter, {0}")]
     Parse(String),
 }
 
@@ -343,6 +346,8 @@ pub enum ClientError {
     Signer(SignerError),
     #[error("failed to compute request digest, {0}")]
     Digest(SignerError),
+    #[error("failed to serialize signature as header value, {0}")]
+    SerializeHeaderValue(InvalidHeaderValue),
 }
 
 // -----------------------------------------------------------------------------
@@ -379,19 +384,7 @@ where
         U: DeserializeOwned + Debug + Send + Sync,
     {
         let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
-        let mut builder = hyper::Request::builder();
-        if let Some(credentials) = &self.credentials {
-            let signer = Signer::try_from(credentials.to_owned()).map_err(ClientError::Signer)?;
-
-            builder = builder.header(
-                header::AUTHORIZATION,
-                signer
-                    .sign(method.as_str(), endpoint)
-                    .map_err(ClientError::Digest)?,
-            );
-        }
-
-        let req = builder
+        let request = hyper::Request::builder()
             .method(method)
             .uri(endpoint)
             .header(
@@ -404,24 +397,7 @@ where
             .body(Body::from(buf.to_owned()))
             .map_err(ClientError::RequestBuilder)?;
 
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
-            trace!(
-                "execute request, endpoint: '{}', method: '{}', body: '{}'",
-                endpoint,
-                method.to_string(),
-                String::from_utf8_lossy(&buf).to_string()
-            );
-        }
-
-        #[cfg(feature = "metrics")]
-        let instant = Instant::now();
-        let res = self
-            .inner
-            .request(req)
-            .await
-            .map_err(ClientError::Request)?;
-
+        let res = self.execute(request).await?;
         let status = res.status();
         let buf = hyper::body::aggregate(res.into_body())
             .await
@@ -430,27 +406,10 @@ where
         #[cfg(feature = "logging")]
         if log_enabled!(Level::Trace) {
             trace!(
-                "received response, endpoint: '{}', method: '{}', status: '{}'",
-                endpoint,
-                method.to_string(),
+                "received response, endpoint: '{endpoint}', method: '{method}', status: '{}'",
                 status.as_u16()
             );
         }
-
-        #[cfg(feature = "metrics")]
-        CLIENT_REQUEST
-            .with_label_values(&[endpoint, method.as_ref(), &status.as_u16().to_string()])
-            .inc();
-
-        #[cfg(feature = "metrics")]
-        CLIENT_REQUEST_DURATION
-            .with_label_values(&[
-                endpoint,
-                method.as_ref(),
-                &status.as_u16().to_string(),
-                "us",
-            ])
-            .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
 
         if !status.is_success() {
             return Err(ClientError::StatusCode(
@@ -460,6 +419,67 @@ where
         }
 
         Ok(serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?)
+    }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    async fn execute(
+        &self,
+        mut request: hyper::Request<Body>,
+    ) -> Result<Response<Body>, Self::Error> {
+        let method = request.method().to_string();
+        let endpoint = request.uri().to_string();
+        if !request.headers().contains_key(&header::AUTHORIZATION) {
+            if let Some(credentials) = &self.credentials {
+                let signer =
+                    Signer::try_from(credentials.to_owned()).map_err(ClientError::Signer)?;
+
+                request.headers_mut().insert(
+                    header::AUTHORIZATION,
+                    signer
+                        .sign(&method, &endpoint)
+                        .map_err(ClientError::Digest)?
+                        .parse()
+                        .map_err(ClientError::SerializeHeaderValue)?,
+                );
+            }
+        }
+
+        #[cfg(feature = "logging")]
+        if log_enabled!(Level::Trace) {
+            trace!("execute request, endpoint: '{endpoint}', method: '{method}'");
+        }
+
+        #[cfg(feature = "metrics")]
+        let instant = Instant::now();
+        let res = self
+            .inner
+            .request(request)
+            .await
+            .map_err(ClientError::Request)?;
+
+        #[cfg(feature = "metrics")]
+        {
+            let status = res.status();
+
+            CLIENT_REQUEST
+                .with_label_values(&[
+                    endpoint.as_str(),
+                    method.as_ref(),
+                    &status.as_u16().to_string(),
+                ])
+                .inc();
+
+            CLIENT_REQUEST_DURATION
+                .with_label_values(&[
+                    endpoint.as_str(),
+                    method.as_ref(),
+                    &status.as_u16().to_string(),
+                    "us",
+                ])
+                .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
+        }
+
+        Ok(res)
     }
 }
 
@@ -475,73 +495,19 @@ where
     where
         T: DeserializeOwned + Debug + Send + Sync,
     {
-        let method = &Method::GET;
-        let mut builder = hyper::Request::builder();
-        if let Some(credentials) = &self.credentials {
-            let signer = Signer::try_from(credentials.to_owned()).map_err(ClientError::Signer)?;
-
-            builder = builder.header(
-                header::AUTHORIZATION,
-                signer
-                    .sign(method.as_str(), endpoint)
-                    .map_err(ClientError::Digest)?,
-            );
-        }
-
-        let req = builder
-            .method(method)
+        let req = hyper::Request::builder()
+            .method(&Method::GET)
             .header(header::ACCEPT_CHARSET, UTF8)
             .header(header::ACCEPT, APPLICATION_JSON)
             .uri(endpoint)
             .body(Body::empty())
             .map_err(ClientError::RequestBuilder)?;
 
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
-            trace!(
-                "execute request, endpoint: '{}', method: '{}', body: '<none>'",
-                endpoint,
-                method.to_string()
-            );
-        }
-
-        #[cfg(feature = "metrics")]
-        let instant = Instant::now();
-        let res = self
-            .inner
-            .request(req)
-            .await
-            .map_err(ClientError::Request)?;
-
+        let res = self.execute(req).await?;
         let status = res.status();
         let buf = hyper::body::aggregate(res.into_body())
             .await
             .map_err(ClientError::BodyAggregation)?;
-
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
-            trace!(
-                "received response, endpoint: '{}', method: '{}', status: '{}'",
-                endpoint,
-                method.to_string(),
-                status.as_u16()
-            );
-        }
-
-        #[cfg(feature = "metrics")]
-        CLIENT_REQUEST
-            .with_label_values(&[endpoint, method.as_ref(), &status.as_u16().to_string()])
-            .inc();
-
-        #[cfg(feature = "metrics")]
-        CLIENT_REQUEST_DURATION
-            .with_label_values(&[
-                endpoint,
-                method.as_ref(),
-                &status.as_u16().to_string(),
-                "us",
-            ])
-            .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
 
         if !status.is_success() {
             return Err(ClientError::StatusCode(
@@ -582,71 +548,17 @@ where
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     async fn delete(&self, endpoint: &str) -> Result<(), Self::Error> {
-        let method = &Method::DELETE;
-        let mut builder = hyper::Request::builder();
-        if let Some(credentials) = &self.credentials {
-            let signer = Signer::try_from(credentials.to_owned()).map_err(ClientError::Signer)?;
-
-            builder = builder.header(
-                header::AUTHORIZATION,
-                signer
-                    .sign(method.as_str(), endpoint)
-                    .map_err(ClientError::Digest)?,
-            );
-        }
-
-        let req = builder
-            .method(method)
+        let req = hyper::Request::builder()
+            .method(&Method::DELETE)
             .uri(endpoint)
             .body(Body::empty())
             .map_err(ClientError::RequestBuilder)?;
 
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
-            trace!(
-                "execute request, endpoint: '{}', method: '{}', body: '<none>'",
-                endpoint,
-                method.to_string()
-            );
-        }
-
-        #[cfg(feature = "metrics")]
-        let instant = Instant::now();
-        let res = self
-            .inner
-            .request(req)
-            .await
-            .map_err(ClientError::Request)?;
-
+        let res = self.execute(req).await?;
         let status = res.status();
         let buf = hyper::body::aggregate(res.into_body())
             .await
             .map_err(ClientError::BodyAggregation)?;
-
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
-            trace!(
-                "received response, endpoint: '{}', method: '{}', status: '{}'",
-                endpoint,
-                method.to_string(),
-                status.as_u16()
-            );
-        }
-
-        #[cfg(feature = "metrics")]
-        CLIENT_REQUEST
-            .with_label_values(&[endpoint, method.as_ref(), &status.as_u16().to_string()])
-            .inc();
-
-        #[cfg(feature = "metrics")]
-        CLIENT_REQUEST_DURATION
-            .with_label_values(&[
-                endpoint,
-                method.as_ref(),
-                &status.as_u16().to_string(),
-                "us",
-            ])
-            .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
 
         if !status.is_success() {
             return Err(ClientError::StatusCode(
