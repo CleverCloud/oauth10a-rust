@@ -455,7 +455,7 @@ where
     pub fn new() -> Self {
         Self {
             proxies: vec![],
-            phantom: PhantomData::default(),
+            phantom: Default::default(),
         }
     }
 
