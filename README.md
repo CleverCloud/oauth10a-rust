@@ -24,20 +24,11 @@ Below, you will find an example of executing a simple request to an api.
 ```rust
 use std::error::Error;
 
-use oauth10a::client::{Client, Credentials, RestClient, proxy::ProxyConnectorBuilder};
+use oauth10a::client::{Client, Credentials, RestClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let connector = ProxyConnectorBuilder::try_from_env()?;
-    let client = Client::builder()
-        .with_credentials(Credentials {
-            token: "".to_string(),
-            secret: "".to_string(),
-            consumer_key: "".to_string(),
-            consumer_secret: "".to_string(),
-        })
-        .build(connector);
-
+    let client = Client::from(Credentials::oauth1("".to_string(), "".to_string(), "".to_string(), "".to_string()));
     let _obj: BtreeMap<String, String> = client.get("https://example.com/object.json").await?;
 
     Ok(())
@@ -46,13 +37,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
 ## Features
 
-| name    | description                                                               |
-| ------- |---------------------------------------------------------------------------|
-| default | Default enable features are `client`, `logging`, `proxy`                  |
-| client  | The oauth 1.0a client implementation                                      |
-| logging | Use the `log` facility crate to print logs                                |
-| metrics | Use `once_cell` and `prometheus` crates to register metrics               |
-| proxy   | Enable the support of environment variable `http_proxy` and `https_proxy` |
+| name    | description                                        |
+|---------|----------------------------------------------------|
+| default | Default enable features are `client` and `logging` |
+| client  | The oauth 1.0a client implementation               |
+| logging | Use the `log` facility crate to print logs         |
+| metrics | Use `prometheus` crates to register metrics        |
 
 ### Metrics
 
