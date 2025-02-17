@@ -1,11 +1,9 @@
 //! # OAuth 1.0a client
 //!
-//! This module provide an oauth1a client implementation. It was firstly designed
+//! This module provides an OAuth 1.0a client implementation. It was firstly designed
 //! to interact with the Clever-Cloud's api, but has been extended to be more
 //! generic.
 
-#[cfg(feature = "metrics")]
-use std::time::Instant;
 use std::{
     collections::BTreeMap,
     convert::TryFrom,
@@ -13,40 +11,39 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     time::{SystemTime, SystemTimeError},
 };
+#[cfg(feature = "metrics")]
+use std::{sync::LazyLock, time::Instant};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
 use bytes::Buf;
 use crypto_common::InvalidLength;
 use hmac::{Hmac, Mac};
-use hyper::{
-    client::{
-        connect::{dns::GaiResolver, Connect},
-        HttpConnector,
-    },
-    header::{self, InvalidHeaderValue},
-    Body, Method, Response, StatusCode,
-};
-use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 #[cfg(feature = "logging")]
 use log::{error, log_enabled, trace, Level};
 #[cfg(feature = "metrics")]
-use once_cell::sync::Lazy;
-#[cfg(feature = "metrics")]
 use prometheus::{opts, register_counter_vec, CounterVec};
+use reqwest::{
+    header::{self, HeaderValue},
+    Method, StatusCode,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::Sha512;
 use uuid::Uuid;
 
-pub mod connector;
-#[cfg(feature = "proxy")]
-pub mod proxy;
+// -----------------------------------------------------------------------------
+// Exports
+
+/// Export reqwest create to ease client creation if needed
+pub use bytes;
+pub use reqwest;
+pub use url;
 
 // -----------------------------------------------------------------------------
 // Telemetry
 
 #[cfg(feature = "metrics")]
-static CLIENT_REQUEST: Lazy<CounterVec> = Lazy::new(|| {
+static CLIENT_REQUEST: LazyLock<CounterVec> = LazyLock::new(|| {
     register_counter_vec!(
         opts!("oauth10a_client_request", "number of request on api"),
         &["endpoint", "method", "status"]
@@ -55,7 +52,7 @@ static CLIENT_REQUEST: Lazy<CounterVec> = Lazy::new(|| {
 });
 
 #[cfg(feature = "metrics")]
-static CLIENT_REQUEST_DURATION: Lazy<CounterVec> = Lazy::new(|| {
+static CLIENT_REQUEST_DURATION: LazyLock<CounterVec> = LazyLock::new(|| {
     register_counter_vec!(
         opts!(
             "oauth10a_client_request_duration",
@@ -87,7 +84,7 @@ pub trait Request {
         T: Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
-    async fn execute(&self, request: hyper::Request<Body>) -> Result<Response<Body>, Self::Error>;
+    async fn execute(&self, request: reqwest::Request) -> Result<reqwest::Response, Self::Error>;
 }
 
 // -----------------------------------------------------------------------------
@@ -125,12 +122,67 @@ where
 // -----------------------------------------------------------------------------
 // ClientCredentials structure
 
-#[derive(PartialEq, Eq, Clone, Debug, Default)]
-pub struct Credentials {
-    pub token: String,
-    pub secret: String,
-    pub consumer_key: String,
-    pub consumer_secret: String,
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
+#[serde(untagged)]
+pub enum Credentials {
+    OAuth1 {
+        #[serde(rename = "token")]
+        token: String,
+        #[serde(rename = "secret")]
+        secret: String,
+        #[serde(rename = "consumer-key")]
+        consumer_key: String,
+        #[serde(rename = "consumer-secret")]
+        consumer_secret: String,
+    },
+    Basic {
+        #[serde(rename = "username")]
+        username: String,
+        #[serde(rename = "password")]
+        password: String,
+    },
+    Bearer {
+        #[serde(rename = "token")]
+        token: String,
+    },
+}
+
+impl Default for Credentials {
+    fn default() -> Self {
+        Self::OAuth1 {
+            token: String::new(),
+            secret: String::new(),
+            consumer_key: String::new(),
+            consumer_secret: String::new(),
+        }
+    }
+}
+
+impl Credentials {
+    #[tracing::instrument(skip_all)]
+    pub fn bearer(token: String) -> Self {
+        Self::Bearer { token }
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub fn basic(username: String, password: String) -> Self {
+        Self::Basic { username, password }
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub fn oauth1(
+        token: String,
+        secret: String,
+        consumer_key: String,
+        consumer_secret: String,
+    ) -> Self {
+        Self::OAuth1 {
+            token,
+            secret,
+            consumer_key,
+            consumer_secret,
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -158,10 +210,10 @@ where
     // `signature` returns the computed signature from given parameters
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error>;
 
-    // `signing_key` returns the key that is used to signed the signature
+    // `signing_key` returns the key that is used to sign the signature
     fn signing_key(&self) -> String;
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     // `sign` returns OAuth1 formatted Authorization header value
     fn sign(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
         let signature = self.signature(method, endpoint)?;
@@ -171,7 +223,7 @@ where
 
         let mut base = params
             .iter()
-            .map(|(k, v)| format!("{}=\"{}\"", k, urlencoding::encode(v)))
+            .map(|(k, v)| format!("{}=\"{}\"", k, v))
             .collect::<Vec<_>>();
 
         base.sort();
@@ -197,7 +249,7 @@ impl Display for ResponseError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "got response {} {}, {}",
+            "got response {} ({}), {}",
             self.kind, self.id, self.message
         )
     }
@@ -216,6 +268,8 @@ pub enum SignerError {
     UnixEpochTime(SystemTimeError),
     #[error("failed to parse signature parameter, {0}")]
     Parse(String),
+    #[error("failed to create signer as credentials are invalid, credentials have to be of type OAuth1, got bearer or basic")]
+    InvalidCredentials,
 }
 
 // -----------------------------------------------------------------------------
@@ -225,19 +279,22 @@ pub enum SignerError {
 pub struct Signer {
     pub nonce: String,
     pub timestamp: u64,
-    pub credentials: Credentials,
+    pub token: String,
+    pub secret: String,
+    pub consumer_key: String,
+    pub consumer_secret: String,
 }
 
 impl OAuth1 for Signer {
     type Error = SignerError;
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn params(&self) -> BTreeMap<String, String> {
         let mut params = BTreeMap::new();
 
         params.insert(
             OAUTH1_CONSUMER_KEY.to_string(),
-            self.credentials.consumer_key.to_string(),
+            self.consumer_key.to_string(),
         );
         params.insert(OAUTH1_NONCE.to_string(), self.nonce.to_string());
         params.insert(
@@ -246,13 +303,13 @@ impl OAuth1 for Signer {
         );
         params.insert(OAUTH1_TIMESTAMP.to_string(), self.timestamp.to_string());
         params.insert(OAUTH1_VERSION.to_string(), OAUTH1_VERSION_1.to_string());
-        params.insert(OAUTH1_TOKEN.to_string(), self.credentials.token.to_string());
+        params.insert(OAUTH1_TOKEN.to_string(), self.token.to_string());
         params
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
-        let (host, query) = match endpoint.find(|c| '?' == c) {
+        let (host, query) = match endpoint.find('?') {
             None => (endpoint, ""),
             // split one character further to not get the '?' character
             Some(position) => endpoint.split_at(position),
@@ -275,7 +332,7 @@ impl OAuth1 for Signer {
 
         let mut params = params
             .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
+            .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
             .collect::<Vec<_>>();
 
         params.sort();
@@ -296,12 +353,12 @@ impl OAuth1 for Signer {
         Ok(BASE64_ENGINE.encode(digest.as_slice()))
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn signing_key(&self) -> String {
         format!(
             "{}&{}",
-            urlencoding::encode(&self.credentials.consumer_secret.to_owned()),
-            urlencoding::encode(&self.credentials.secret.to_owned())
+            urlencoding::encode(&self.consumer_secret.to_owned()),
+            urlencoding::encode(&self.secret.to_owned())
         )
     }
 }
@@ -309,7 +366,7 @@ impl OAuth1 for Signer {
 impl TryFrom<Credentials> for Signer {
     type Error = SignerError;
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn try_from(credentials: Credentials) -> Result<Self, Self::Error> {
         let nonce = Uuid::new_v4().to_string();
         let timestamp = SystemTime::now()
@@ -317,11 +374,22 @@ impl TryFrom<Credentials> for Signer {
             .map_err(SignerError::UnixEpochTime)?
             .as_secs();
 
-        Ok(Self {
-            nonce,
-            timestamp,
-            credentials,
-        })
+        match credentials {
+            Credentials::OAuth1 {
+                token,
+                secret,
+                consumer_key,
+                consumer_secret,
+            } => Ok(Self {
+                nonce,
+                timestamp,
+                token,
+                secret,
+                consumer_key,
+                consumer_secret,
+            }),
+            _ => Err(SignerError::InvalidCredentials),
+        }
     }
 }
 
@@ -330,14 +398,12 @@ impl TryFrom<Credentials> for Signer {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ClientError {
-    #[error("failed to build request, {0}")]
-    RequestBuilder(hyper::http::Error),
     #[error("failed to execute request, {0}")]
-    Request(hyper::Error),
+    Request(reqwest::Error),
     #[error("failed to execute request, got status code {0}, {1}")]
     StatusCode(StatusCode, ResponseError),
     #[error("failed to aggregate body, {0}")]
-    BodyAggregation(hyper::Error),
+    BodyAggregation(reqwest::Error),
     #[error("failed to serialize body, {0}")]
     Serialize(serde_json::Error),
     #[error("failed to deserialize body, {0}")]
@@ -347,7 +413,9 @@ pub enum ClientError {
     #[error("failed to compute request digest, {0}")]
     Digest(SignerError),
     #[error("failed to serialize signature as header value, {0}")]
-    SerializeHeaderValue(InvalidHeaderValue),
+    SerializeHeaderValue(header::InvalidHeaderValue),
+    #[error("failed to parse url endpoint, {0}")]
+    ParseUrlEndpoint(url::ParseError),
 }
 
 // -----------------------------------------------------------------------------
@@ -357,22 +425,16 @@ pub const APPLICATION_JSON: &str = "application/json";
 pub const UTF8: &str = "utf-8";
 
 #[derive(Clone, Debug)]
-pub struct Client<C>
-where
-    C: Connect + Clone + Debug + Send + Sync + 'static,
-{
-    inner: hyper::Client<C, Body>,
+pub struct Client {
+    inner: reqwest::Client,
     credentials: Option<Credentials>,
 }
 
 #[async_trait]
-impl<C> Request for Client<C>
-where
-    C: Connect + Clone + Debug + Send + Sync + 'static,
-{
+impl Request for Client {
     type Error = ClientError;
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn request<T, U>(
         &self,
         method: &Method,
@@ -384,24 +446,33 @@ where
         U: DeserializeOwned + Debug + Send + Sync,
     {
         let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
-        let request = hyper::Request::builder()
-            .method(method)
-            .uri(endpoint)
-            .header(
-                header::CONTENT_TYPE,
-                &format!("{}; charset={}", APPLICATION_JSON, UTF8),
-            )
-            .header(header::CONTENT_LENGTH, &format!("{}", buf.len()))
-            .header(header::ACCEPT_CHARSET, UTF8)
-            .header(header::ACCEPT, APPLICATION_JSON)
-            .body(Body::from(buf.to_owned()))
-            .map_err(ClientError::RequestBuilder)?;
+        let mut request = reqwest::Request::new(
+            method.to_owned(),
+            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
+        );
+
+        request.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(APPLICATION_JSON),
+        );
+
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()));
+
+        request
+            .headers_mut()
+            .insert(header::ACCEPT_CHARSET, HeaderValue::from_static(UTF8));
+
+        request
+            .headers_mut()
+            .insert(header::ACCEPT, HeaderValue::from_static(APPLICATION_JSON));
+
+        *request.body_mut() = Some(buf.into());
 
         let res = self.execute(request).await?;
         let status = res.status();
-        let buf = hyper::body::aggregate(res.into_body())
-            .await
-            .map_err(ClientError::BodyAggregation)?;
+        let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
 
         #[cfg(feature = "logging")]
         if log_enabled!(Level::Trace) {
@@ -421,26 +492,45 @@ where
         Ok(serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?)
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn execute(
         &self,
-        mut request: hyper::Request<Body>,
-    ) -> Result<Response<Body>, Self::Error> {
+        mut request: reqwest::Request,
+    ) -> Result<reqwest::Response, Self::Error> {
         let method = request.method().to_string();
-        let endpoint = request.uri().to_string();
+        let endpoint = request.url().to_string();
         if !request.headers().contains_key(&header::AUTHORIZATION) {
-            if let Some(credentials) = &self.credentials {
-                let signer =
-                    Signer::try_from(credentials.to_owned()).map_err(ClientError::Signer)?;
+            match &self.credentials {
+                Some(Credentials::Bearer { token }) => {
+                    request.headers_mut().insert(
+                        header::AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {}", token))
+                            .map_err(ClientError::SerializeHeaderValue)?,
+                    );
+                }
+                Some(Credentials::Basic { username, password }) => {
+                    let token = BASE64_ENGINE.encode(format!("{username}:{password}"));
 
-                request.headers_mut().insert(
-                    header::AUTHORIZATION,
-                    signer
-                        .sign(&method, &endpoint)
-                        .map_err(ClientError::Digest)?
-                        .parse()
-                        .map_err(ClientError::SerializeHeaderValue)?,
-                );
+                    request.headers_mut().insert(
+                        header::AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Basic {token}",))
+                            .map_err(ClientError::SerializeHeaderValue)?,
+                    );
+                }
+                Some(credentials) => {
+                    let signer =
+                        Signer::try_from(credentials.to_owned()).map_err(ClientError::Signer)?;
+
+                    request.headers_mut().insert(
+                        header::AUTHORIZATION,
+                        signer
+                            .sign(&method, &endpoint)
+                            .map_err(ClientError::Digest)?
+                            .parse()
+                            .map_err(ClientError::SerializeHeaderValue)?,
+                    );
+                }
+                _ => {}
             }
         }
 
@@ -453,7 +543,7 @@ where
         let instant = Instant::now();
         let res = self
             .inner
-            .request(request)
+            .execute(request)
             .await
             .map_err(ClientError::Request)?;
 
@@ -462,20 +552,11 @@ where
             let status = res.status();
 
             CLIENT_REQUEST
-                .with_label_values(&[
-                    endpoint.as_str(),
-                    method.as_ref(),
-                    &status.as_u16().to_string(),
-                ])
+                .with_label_values(&[&endpoint, &method, &status.as_u16().to_string()])
                 .inc();
 
             CLIENT_REQUEST_DURATION
-                .with_label_values(&[
-                    endpoint.as_str(),
-                    method.as_ref(),
-                    &status.as_u16().to_string(),
-                    "us",
-                ])
+                .with_label_values(&[&endpoint, &method, &status.as_u16().to_string(), "us"])
                 .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
         }
 
@@ -484,30 +565,28 @@ where
 }
 
 #[async_trait]
-impl<C> RestClient for Client<C>
-where
-    C: Connect + Clone + Debug + Send + Sync + 'static,
-{
+impl RestClient for Client {
     type Error = ClientError;
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn get<T>(&self, endpoint: &str) -> Result<T, Self::Error>
     where
         T: DeserializeOwned + Debug + Send + Sync,
     {
-        let req = hyper::Request::builder()
-            .method(&Method::GET)
-            .header(header::ACCEPT_CHARSET, UTF8)
-            .header(header::ACCEPT, APPLICATION_JSON)
-            .uri(endpoint)
-            .body(Body::empty())
-            .map_err(ClientError::RequestBuilder)?;
+        let mut req = reqwest::Request::new(
+            Method::GET,
+            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
+        );
+
+        req.headers_mut()
+            .insert(header::ACCEPT_CHARSET, HeaderValue::from_static(UTF8));
+
+        req.headers_mut()
+            .insert(header::ACCEPT, HeaderValue::from_static(APPLICATION_JSON));
 
         let res = self.execute(req).await?;
         let status = res.status();
-        let buf = hyper::body::aggregate(res.into_body())
-            .await
-            .map_err(ClientError::BodyAggregation)?;
+        let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
 
         if !status.is_success() {
             return Err(ClientError::StatusCode(
@@ -519,7 +598,7 @@ where
         Ok(serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?)
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn post<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
         T: Serialize + Debug + Send + Sync,
@@ -528,7 +607,7 @@ where
         self.request(&Method::POST, endpoint, payload).await
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn put<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
         T: Serialize + Debug + Send + Sync,
@@ -537,7 +616,7 @@ where
         self.request(&Method::PUT, endpoint, payload).await
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn patch<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
         T: Serialize + Debug + Send + Sync,
@@ -546,19 +625,16 @@ where
         self.request(&Method::PATCH, endpoint, payload).await
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn delete(&self, endpoint: &str) -> Result<(), Self::Error> {
-        let req = hyper::Request::builder()
-            .method(&Method::DELETE)
-            .uri(endpoint)
-            .body(Body::empty())
-            .map_err(ClientError::RequestBuilder)?;
+        let req = reqwest::Request::new(
+            Method::DELETE,
+            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
+        );
 
         let res = self.execute(req).await?;
         let status = res.status();
-        let buf = hyper::body::aggregate(res.into_body())
-            .await
-            .map_err(ClientError::BodyAggregation)?;
+        let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
 
         if !status.is_success() {
             return Err(ClientError::StatusCode(
@@ -571,62 +647,40 @@ where
     }
 }
 
-impl Default for Client<HttpsConnector<HttpConnector<GaiResolver>>> {
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+impl Default for Client {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn default() -> Self {
-        Self::new(
-            HttpsConnectorBuilder::new()
-                .with_webpki_roots()
-                .https_or_http()
-                .enable_http1()
-                .build(),
-            None,
-        )
+        Self::new(reqwest::Client::new(), None)
     }
 }
 
-impl From<Credentials> for Client<HttpsConnector<HttpConnector<GaiResolver>>> {
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+impl From<Credentials> for Client {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn from(credentials: Credentials) -> Self {
-        Self::new(
-            HttpsConnectorBuilder::new()
-                .with_webpki_roots()
-                .https_or_http()
-                .enable_http1()
-                .build(),
-            Some(credentials),
-        )
+        Self::new(reqwest::Client::new(), Some(credentials))
     }
 }
 
-impl<C> From<C> for Client<C>
-where
-    C: Connect + Clone + Debug + Send + Sync + 'static,
-{
-    #[cfg_attr(feature = "trace", tracing::instrument)]
-    fn from(connector: C) -> Self {
-        Self::new(connector, None)
+impl From<reqwest::Client> for Client {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    fn from(client: reqwest::Client) -> Self {
+        Self::new(client, None)
     }
 }
 
-impl<C> Client<C>
-where
-    C: Connect + Clone + Debug + Send + Sync + 'static,
-{
-    #[cfg_attr(feature = "trace", tracing::instrument)]
-    pub fn new(connector: C, credentials: Option<Credentials>) -> Self {
-        let inner = hyper::Client::builder().build(connector);
-
+impl Client {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    pub fn new(inner: reqwest::Client, credentials: Option<Credentials>) -> Self {
         Self { inner, credentials }
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     pub fn set_credentials(&mut self, credentials: Option<Credentials>) {
         self.credentials = credentials;
     }
 
-    #[cfg_attr(feature = "trace", tracing::instrument)]
-    pub fn inner(&self) -> &hyper::Client<C> {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    pub fn inner(&self) -> &reqwest::Client {
         &self.inner
     }
 }
