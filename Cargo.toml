@@ -1,7 +1,7 @@
 [package]
 name = "oauth10a"
 description = "A rust implementation of the oauth 1.0a protocol fully-async with logging, metrics and tracing facilities"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 rust-version = "1.85.0"
 authors = ["Florentin Dubois <florentin.dubois@clever-cloud.com>"]
@@ -25,11 +25,11 @@ bytes = { version = "^1.10.0", features = ["serde"], optional = true }
 cidr = { version = "^0.3.1", optional = true }
 crypto-common = { version = "^0.1.6", optional = true }
 hmac = { version = "^0.12.1", features = ["std"], optional = true }
-log = { version = "^0.4.21", optional = true }
+log = { version = "^0.4.26", optional = true }
 prometheus = { version = "^0.13.4", optional = true }
 reqwest = { version = "^0.12.12", default-features = true, features = ["rustls-tls-webpki-roots", "charset", "http2", "gzip", "deflate", "zstd", "json", "hickory-dns"], optional = true }
-serde = { version = "^1.0.217", features = ["derive"], optional = true }
-serde_json = { version = "^1.0.138", features = [
+serde = { version = "^1.0.218", features = ["derive"], optional = true }
+serde_json = { version = "^1.0.139", features = [
     "preserve_order",
     "float_roundtrip",
 ], optional = true }
