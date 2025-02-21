@@ -15,19 +15,19 @@ use std::{
 use std::{sync::LazyLock, time::Instant};
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_ENGINE};
 use bytes::Buf;
 use crypto_common::InvalidLength;
 use hmac::{Hmac, Mac};
 #[cfg(feature = "logging")]
-use log::{error, log_enabled, trace, Level};
+use log::{Level, error, log_enabled, trace};
 #[cfg(feature = "metrics")]
-use prometheus::{opts, register_counter_vec, CounterVec};
+use prometheus::{CounterVec, opts, register_counter_vec};
 use reqwest::{
-    header::{self, HeaderValue},
     Method, StatusCode,
+    header::{self, HeaderValue},
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha512;
 use uuid::Uuid;
 
@@ -268,7 +268,9 @@ pub enum SignerError {
     UnixEpochTime(SystemTimeError),
     #[error("failed to parse signature parameter, {0}")]
     Parse(String),
-    #[error("failed to create signer as credentials are invalid, credentials have to be of type OAuth1, got bearer or basic")]
+    #[error(
+        "failed to create signer as credentials are invalid, credentials have to be of type OAuth1, got bearer or basic"
+    )]
     InvalidCredentials,
 }
 
