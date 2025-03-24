@@ -13,7 +13,6 @@ keywords = ["clevercloud", "client", "logging", "metrics", "oauth1a"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = { version = "^0.1.87", optional = true }
 base64 = { version = "^0.22.1", optional = true }
 bytes = { version = "^1.10.1", features = ["serde"], optional = true }
 cidr = { version = "^0.3.1", optional = true }
@@ -49,7 +48,6 @@ uuid = { version = "^1.15.1", features = ["serde", "v4"], optional = true }
 [features]
 default = ["client", "logging"]
 client = [
-    "async-trait",
     "base64",
     "bytes",
     "cidr",

@@ -9,12 +9,12 @@ use std::{
     convert::TryFrom,
     error::Error,
     fmt::{self, Debug, Display, Formatter},
+    future::Future,
     time::{SystemTime, SystemTimeError},
 };
 #[cfg(feature = "metrics")]
 use std::{sync::LazyLock, time::Instant};
 
-use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_ENGINE};
 use bytes::Buf;
 use crypto_common::InvalidLength;
@@ -65,58 +65,69 @@ static CLIENT_REQUEST_DURATION: LazyLock<CounterVec> = LazyLock::new(|| {
 
 // -----------------------------------------------------------------------------
 // Types
+
 type HmacSha512 = Hmac<Sha512>;
 
 // -----------------------------------------------------------------------------
 // Request trait
 
-#[async_trait]
 pub trait Request {
     type Error;
 
-    async fn request<T, U>(
+    fn request<T, U>(
         &self,
         method: &Method,
         endpoint: &str,
         payload: &T,
-    ) -> Result<U, Self::Error>
+    ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
         T: Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
-    async fn execute(&self, request: reqwest::Request) -> Result<reqwest::Response, Self::Error>;
+    fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + Send;
 }
 
 // -----------------------------------------------------------------------------
 // RestClient trait
 
-#[async_trait]
-pub trait RestClient
-where
-    Self: Debug,
-{
+pub trait RestClient: Debug {
     type Error;
 
-    async fn get<T>(&self, endpoint: &str) -> Result<T, Self::Error>
+    fn get<T>(&self, endpoint: &str) -> impl Future<Output = Result<T, Self::Error>> + Send
     where
         T: DeserializeOwned + Debug + Send + Sync;
 
-    async fn post<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    fn post<T, U>(
+        &self,
+        endpoint: &str,
+        payload: &T,
+    ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
         T: Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
-    async fn put<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    fn put<T, U>(
+        &self,
+        endpoint: &str,
+        payload: &T,
+    ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
         T: Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
-    async fn patch<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    fn patch<T, U>(
+        &self,
+        endpoint: &str,
+        payload: &T,
+    ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
         T: Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
-    async fn delete(&self, endpoint: &str) -> Result<(), Self::Error>;
+    fn delete(&self, endpoint: &str) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // -----------------------------------------------------------------------------
@@ -198,10 +209,7 @@ pub const OAUTH1_VERSION: &str = "oauth_version";
 pub const OAUTH1_VERSION_1: &str = "1.0";
 pub const OAUTH1_TOKEN: &str = "oauth_token";
 
-pub trait OAuth1
-where
-    Self: Debug,
-{
+pub trait OAuth1: Debug {
     type Error;
 
     // `params` returns OAuth1 parameters without the signature one
@@ -432,7 +440,6 @@ pub struct Client {
     credentials: Option<Credentials>,
 }
 
-#[async_trait]
 impl Request for Client {
     type Error = ClientError;
 
@@ -491,7 +498,7 @@ impl Request for Client {
             ));
         }
 
-        Ok(serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?)
+        serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
@@ -566,7 +573,6 @@ impl Request for Client {
     }
 }
 
-#[async_trait]
 impl RestClient for Client {
     type Error = ClientError;
 
@@ -597,7 +603,7 @@ impl RestClient for Client {
             ));
         }
 
-        Ok(serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?)
+        serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
