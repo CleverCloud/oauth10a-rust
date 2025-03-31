@@ -565,7 +565,12 @@ impl Request for Client {
                 .inc();
 
             CLIENT_REQUEST_DURATION
-                .with_label_values(&[&endpoint, &method, &status.as_u16().to_string(), "us"])
+                .with_label_values(&[
+                    &endpoint,
+                    &method,
+                    &status.as_u16().to_string(),
+                    &"us".to_string(),
+                ])
                 .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
         }
 
