@@ -16,8 +16,11 @@ keywords = ["clevercloud", "client", "logging", "metrics", "oauth1a"]
 base64 = { version = "^0.22.1", optional = true }
 bytes = { version = "^1.10.1", features = ["serde"], optional = true }
 crypto-common = { version = "^0.1.6", optional = true }
+futures = { version = "^0.3.31", optional = true }
 hmac = { version = "^0.12.1", features = ["std"], optional = true }
 log = { version = "^0.4.27", optional = true }
+memchr = { version = "^2.7.4", optional = true }
+mime = { version = "^0.3.17", optional = true }
 prometheus = { version = "^0.14.0", optional = true }
 reqwest = { version = "^0.12.15", default-features = true, features = [
     "rustls-tls-webpki-roots",
@@ -28,6 +31,7 @@ reqwest = { version = "^0.12.15", default-features = true, features = [
     "zstd",
     "json",
     "hickory-dns",
+    "stream",
 ], optional = true }
 serde = { version = "^1.0.219", features = ["derive"], optional = true }
 serde_json = { version = "^1.0.140", features = [
@@ -36,12 +40,20 @@ serde_json = { version = "^1.0.140", features = [
 ], optional = true }
 sha2 = { version = "^0.10.8", optional = true }
 thiserror = { version = "^2.0.12", optional = true }
+tokio = { version = "^1.44.2", optional = true, default-features = false, features = [
+    "time",
+] }
 tracing = { version = "^0.1.41", optional = true }
 url = { version = "^2.5.4", default-features = false, features = [
     "serde",
 ], optional = true }
 urlencoding = { version = "^2.1.3", optional = true }
 uuid = { version = "^1.16.0", features = ["serde", "v4"], optional = true }
+
+[dev-dependencies]
+anyhow = { version = "^1.0.98" }
+axum = { version = "^0.8.3" }
+tokio = { version = "^1.44.2", features = ["full"] }
 
 [features]
 default = ["client", "logging"]
@@ -62,3 +74,4 @@ client = [
 logging = ["log", "tracing/log-always"]
 tracing = ["dep:tracing"]
 metrics = ["prometheus"]
+sse = ["dep:futures", "dep:mime", "dep:memchr", "dep:tokio"]
