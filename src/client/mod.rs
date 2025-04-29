@@ -6,7 +6,6 @@
 
 use std::{
     collections::BTreeMap,
-    convert::TryFrom,
     error::Error,
     fmt::{self, Debug, Display, Formatter},
     future::Future,
@@ -227,11 +226,14 @@ pub trait OAuth1: Debug {
         let signature = self.signature(method, endpoint)?;
         let mut params = self.params();
 
-        params.insert(OAUTH1_SIGNATURE.to_string(), signature);
+        params.insert(
+            OAUTH1_SIGNATURE.to_string(),
+            urlencoding::encode(&signature).into_owned(),
+        );
 
         let mut base = params
             .iter()
-            .map(|(k, v)| format!("{}=\"{}\"", k, v))
+            .map(|(k, v)| format!("{k}=\"{v}\""))
             .collect::<Vec<_>>();
 
         base.sort();
@@ -331,7 +333,7 @@ impl OAuth1 for Signer {
         if !query.is_empty() {
             for qparam in query.split('&') {
                 let (k, v) = qparam.split_at(qparam.find('=').ok_or_else(|| {
-                    SignerError::Parse(format!("failed to parse query parameter, {}", qparam))
+                    SignerError::Parse(format!("failed to parse query parameter, {qparam}"))
                 })?);
 
                 if !params.contains_key(k) {
@@ -367,8 +369,8 @@ impl OAuth1 for Signer {
     fn signing_key(&self) -> String {
         format!(
             "{}&{}",
-            urlencoding::encode(&self.consumer_secret.to_owned()),
-            urlencoding::encode(&self.secret.to_owned())
+            urlencoding::encode(&self.consumer_secret),
+            urlencoding::encode(&self.secret)
         )
     }
 }
@@ -513,7 +515,7 @@ impl Request for Client {
                 Some(Credentials::Bearer { token }) => {
                     request.headers_mut().insert(
                         header::AUTHORIZATION,
-                        HeaderValue::from_str(&format!("Bearer {}", token))
+                        HeaderValue::from_str(&format!("Bearer {token}"))
                             .map_err(ClientError::SerializeHeaderValue)?,
                     );
                 }
@@ -522,7 +524,7 @@ impl Request for Client {
 
                     request.headers_mut().insert(
                         header::AUTHORIZATION,
-                        HeaderValue::from_str(&format!("Basic {token}",))
+                        HeaderValue::from_str(&format!("Basic {token}"))
                             .map_err(ClientError::SerializeHeaderValue)?,
                     );
                 }
