@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 | logging | Use the `log` facility crate to print logs                    |
 | metrics | Use `prometheus` crates to register metrics                   |
 | tracing | Use `tracing` crate to add `tracing::instrument` on functions |
+| sse     | Enables streaming Server-Sent Events (SSE)                    |
 
 ### Metrics
 

@@ -30,6 +30,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha512;
 use uuid::Uuid;
 
+#[cfg(feature = "sse")]
+pub mod sse;
+
 // -----------------------------------------------------------------------------
 // Exports
 
@@ -86,7 +89,7 @@ pub trait Request {
     fn execute(
         &self,
         request: reqwest::Request,
-    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + Send + 'static;
 }
 
 // -----------------------------------------------------------------------------
@@ -362,7 +365,7 @@ impl OAuth1 for Signer {
         hasher.update(base.as_bytes());
 
         let digest = hasher.finalize().into_bytes();
-        Ok(BASE64_ENGINE.encode(digest.as_slice()))
+        Ok(urlencoding::encode(&BASE64_ENGINE.encode(digest.as_slice())).into_owned())
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
@@ -433,8 +436,9 @@ pub enum ClientError {
 // -----------------------------------------------------------------------------
 // Client structure
 
-pub const APPLICATION_JSON: &str = "application/json";
-pub const UTF8: &str = "utf-8";
+pub const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json");
+
+pub const UTF8: HeaderValue = HeaderValue::from_static("utf-8");
 
 #[derive(Clone, Debug)]
 pub struct Client {
@@ -462,22 +466,19 @@ impl Request for Client {
             endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
         );
 
-        request.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(APPLICATION_JSON),
-        );
+        request
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, APPLICATION_JSON);
 
         request
             .headers_mut()
             .insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()));
 
-        request
-            .headers_mut()
-            .insert(header::ACCEPT_CHARSET, HeaderValue::from_static(UTF8));
+        request.headers_mut().insert(header::ACCEPT_CHARSET, UTF8);
 
         request
             .headers_mut()
-            .insert(header::ACCEPT, HeaderValue::from_static(APPLICATION_JSON));
+            .insert(header::ACCEPT, APPLICATION_JSON);
 
         *request.body_mut() = Some(buf.into());
 
@@ -503,80 +504,81 @@ impl Request for Client {
         serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn execute(
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
+    fn execute(
         &self,
         mut request: reqwest::Request,
-    ) -> Result<reqwest::Response, Self::Error> {
-        let method = request.method().to_string();
-        let endpoint = request.url().to_string();
-        if !request.headers().contains_key(&header::AUTHORIZATION) {
-            match &self.credentials {
-                Some(Credentials::Bearer { token }) => {
-                    request.headers_mut().insert(
-                        header::AUTHORIZATION,
-                        HeaderValue::from_str(&format!("Bearer {token}"))
-                            .map_err(ClientError::SerializeHeaderValue)?,
-                    );
-                }
-                Some(Credentials::Basic { username, password }) => {
-                    let token = BASE64_ENGINE.encode(format!("{username}:{password}"));
+    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + 'static {
+        let client = self.clone();
 
-                    request.headers_mut().insert(
-                        header::AUTHORIZATION,
-                        HeaderValue::from_str(&format!("Basic {token}"))
-                            .map_err(ClientError::SerializeHeaderValue)?,
-                    );
-                }
-                Some(credentials) => {
-                    let signer =
-                        Signer::try_from(credentials.to_owned()).map_err(ClientError::Signer)?;
+        async move {
+            let method = request.method().to_string();
+            let endpoint = request.url().to_string();
 
-                    request.headers_mut().insert(
-                        header::AUTHORIZATION,
-                        signer
-                            .sign(&method, &endpoint)
-                            .map_err(ClientError::Digest)?
-                            .parse()
-                            .map_err(ClientError::SerializeHeaderValue)?,
-                    );
+            if !request.headers().contains_key(&header::AUTHORIZATION) {
+                match &client.credentials {
+                    Some(Credentials::Bearer { token }) => {
+                        request.headers_mut().insert(
+                            header::AUTHORIZATION,
+                            HeaderValue::from_str(&format!("Bearer {token}"))
+                                .map_err(ClientError::SerializeHeaderValue)?,
+                        );
+                    }
+                    Some(Credentials::Basic { username, password }) => {
+                        let token = BASE64_ENGINE.encode(format!("{username}:{password}"));
+
+                        request.headers_mut().insert(
+                            header::AUTHORIZATION,
+                            HeaderValue::from_str(&format!("Basic {token}",))
+                                .map_err(ClientError::SerializeHeaderValue)?,
+                        );
+                    }
+                    Some(credentials) => {
+                        request.headers_mut().insert(
+                            header::AUTHORIZATION,
+                            Signer::try_from(credentials.to_owned())
+                                .map_err(ClientError::Signer)?
+                                .sign(&method, &endpoint)
+                                .map_err(ClientError::Digest)?
+                                .parse()
+                                .map_err(ClientError::SerializeHeaderValue)?,
+                        );
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
 
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
+            #[cfg(feature = "logging")]
             trace!("execute request, endpoint: '{endpoint}', method: '{method}'");
+
+            #[cfg(feature = "metrics")]
+            let instant = Instant::now();
+            let res = client
+                .inner
+                .execute(request)
+                .await
+                .map_err(ClientError::Request)?;
+
+            #[cfg(feature = "metrics")]
+            {
+                let status = res.status();
+
+                CLIENT_REQUEST
+                    .with_label_values(&[&endpoint, &method, &status.as_u16().to_string()])
+                    .inc();
+
+                CLIENT_REQUEST_DURATION
+                    .with_label_values(&[
+                        &endpoint,
+                        &method,
+                        &status.as_u16().to_string(),
+                        &"us".to_string(),
+                    ])
+                    .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
+            }
+
+            Ok(res)
         }
-
-        #[cfg(feature = "metrics")]
-        let instant = Instant::now();
-        let res = self
-            .inner
-            .execute(request)
-            .await
-            .map_err(ClientError::Request)?;
-
-        #[cfg(feature = "metrics")]
-        {
-            let status = res.status();
-
-            CLIENT_REQUEST
-                .with_label_values(&[&endpoint, &method, &status.as_u16().to_string()])
-                .inc();
-
-            CLIENT_REQUEST_DURATION
-                .with_label_values(&[
-                    &endpoint,
-                    &method,
-                    &status.as_u16().to_string(),
-                    &"us".to_string(),
-                ])
-                .inc_by(Instant::now().duration_since(instant).as_micros() as f64);
-        }
-
-        Ok(res)
     }
 }
 
@@ -593,11 +595,9 @@ impl RestClient for Client {
             endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
         );
 
-        req.headers_mut()
-            .insert(header::ACCEPT_CHARSET, HeaderValue::from_static(UTF8));
+        req.headers_mut().insert(header::ACCEPT_CHARSET, UTF8);
 
-        req.headers_mut()
-            .insert(header::ACCEPT, HeaderValue::from_static(APPLICATION_JSON));
+        req.headers_mut().insert(header::ACCEPT, APPLICATION_JSON);
 
         let res = self.execute(req).await?;
         let status = res.status();
