@@ -83,7 +83,7 @@ pub trait Request {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
     fn execute(
@@ -108,7 +108,7 @@ pub trait RestClient: Debug {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
     fn put<T, U>(
@@ -117,7 +117,7 @@ pub trait RestClient: Debug {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
     fn patch<T, U>(
@@ -126,7 +126,7 @@ pub trait RestClient: Debug {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
     fn delete(&self, endpoint: &str) -> impl Future<Output = Result<(), Self::Error>> + Send;
@@ -457,7 +457,7 @@ impl Request for Client {
         payload: &T,
     ) -> Result<U, Self::Error>
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync,
     {
         let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
@@ -616,7 +616,7 @@ impl RestClient for Client {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn post<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync,
     {
         self.request(&Method::POST, endpoint, payload).await
@@ -625,7 +625,7 @@ impl RestClient for Client {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn put<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync,
     {
         self.request(&Method::PUT, endpoint, payload).await
@@ -634,7 +634,7 @@ impl RestClient for Client {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn patch<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
     where
-        T: Serialize + Debug + Send + Sync,
+        T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync,
     {
         self.request(&Method::PATCH, endpoint, payload).await
