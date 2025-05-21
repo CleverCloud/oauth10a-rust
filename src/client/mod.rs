@@ -19,11 +19,11 @@ use bytes::Buf;
 use crypto_common::InvalidLength;
 use hmac::{Hmac, Mac};
 #[cfg(feature = "logging")]
-use log::{Level, error, log_enabled, trace};
+use log::{error, trace};
 #[cfg(feature = "metrics")]
 use prometheus::{CounterVec, opts, register_counter_vec};
 use reqwest::{
-    Method, StatusCode,
+    IntoUrl, Method, StatusCode,
     header::{self, HeaderValue},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -71,20 +71,11 @@ static CLIENT_REQUEST_DURATION: LazyLock<CounterVec> = LazyLock::new(|| {
 type HmacSha512 = Hmac<Sha512>;
 
 // -----------------------------------------------------------------------------
-// Request trait
+// Execute trait
 
-pub trait Request {
+/// Execute HTTP requests.
+pub trait Execute {
     type Error;
-
-    fn request<T, U>(
-        &self,
-        method: &Method,
-        endpoint: &str,
-        payload: &T,
-    ) -> impl Future<Output = Result<U, Self::Error>> + Send
-    where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
 
     fn execute(
         &self,
@@ -95,16 +86,24 @@ pub trait Request {
 // -----------------------------------------------------------------------------
 // RestClient trait
 
-pub trait RestClient: Debug {
-    type Error;
+pub trait RestClient<X>: Execute {
+    fn request<T, U>(
+        &self,
+        method: &Method,
+        endpoint: X,
+        payload: &T,
+    ) -> impl Future<Output = Result<U, Self::Error>> + Send
+    where
+        T: ?Sized + Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync;
 
-    fn get<T>(&self, endpoint: &str) -> impl Future<Output = Result<T, Self::Error>> + Send
+    fn get<T>(&self, endpoint: X) -> impl Future<Output = Result<T, Self::Error>> + Send
     where
         T: DeserializeOwned + Debug + Send + Sync;
 
     fn post<T, U>(
         &self,
-        endpoint: &str,
+        endpoint: X,
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
@@ -113,7 +112,7 @@ pub trait RestClient: Debug {
 
     fn put<T, U>(
         &self,
-        endpoint: &str,
+        endpoint: X,
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
@@ -122,14 +121,14 @@ pub trait RestClient: Debug {
 
     fn patch<T, U>(
         &self,
-        endpoint: &str,
+        endpoint: X,
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
         T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync;
 
-    fn delete(&self, endpoint: &str) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn delete(&self, endpoint: X) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // -----------------------------------------------------------------------------
@@ -440,8 +439,6 @@ pub enum ClientError {
     Digest(SignerError),
     #[error("failed to serialize signature as header value, {0}")]
     SerializeHeaderValue(header::InvalidHeaderValue),
-    #[error("failed to parse url endpoint, {0}")]
-    ParseUrlEndpoint(url::ParseError),
 }
 
 // -----------------------------------------------------------------------------
@@ -457,69 +454,15 @@ pub struct Client {
     credentials: Option<Credentials>,
 }
 
-impl Request for Client {
+impl Execute for Client {
     type Error = ClientError;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn request<T, U>(
-        &self,
-        method: &Method,
-        endpoint: &str,
-        payload: &T,
-    ) -> Result<U, Self::Error>
-    where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
-    {
-        let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
-        let mut request = reqwest::Request::new(
-            method.to_owned(),
-            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
-        );
-
-        request
-            .headers_mut()
-            .insert(header::CONTENT_TYPE, APPLICATION_JSON);
-
-        request
-            .headers_mut()
-            .insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()));
-
-        request.headers_mut().insert(header::ACCEPT_CHARSET, UTF8);
-
-        request
-            .headers_mut()
-            .insert(header::ACCEPT, APPLICATION_JSON);
-
-        *request.body_mut() = Some(buf.into());
-
-        let res = self.execute(request).await?;
-        let status = res.status();
-        let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
-
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
-            trace!(
-                "received response, endpoint: '{endpoint}', method: '{method}', status: '{}'",
-                status.as_u16()
-            );
-        }
-
-        if !status.is_success() {
-            return Err(ClientError::StatusCode(
-                status,
-                serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?,
-            ));
-        }
-
-        serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)
-    }
-
+    /// Executes the given HTTP `request`.
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     fn execute(
         &self,
         mut request: reqwest::Request,
-    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + 'static {
+    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + Send + 'static {
         let client = self.clone();
 
         async move {
@@ -593,18 +536,63 @@ impl Request for Client {
     }
 }
 
-impl RestClient for Client {
-    type Error = ClientError;
+impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    async fn request<T, U>(
+        &self,
+        method: &Method,
+        endpoint: X,
+        payload: &T,
+    ) -> Result<U, Self::Error>
+    where
+        T: ?Sized + Serialize + Debug + Send + Sync,
+        U: DeserializeOwned + Debug + Send + Sync,
+    {
+        let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
+
+        let url = endpoint.into_url().map_err(ClientError::Request)?;
+
+        #[cfg(feature = "logging")]
+        let endpoint = url.as_str().to_owned();
+
+        let mut request = reqwest::Request::new(method.to_owned(), url);
+
+        let headers = request.headers_mut();
+        headers.insert(header::CONTENT_TYPE, APPLICATION_JSON);
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()));
+        headers.insert(header::ACCEPT_CHARSET, UTF8);
+        headers.insert(header::ACCEPT, APPLICATION_JSON);
+
+        *request.body_mut() = Some(buf.into());
+
+        let res = self.execute(request).await?;
+        let status = res.status();
+        let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
+
+        #[cfg(feature = "logging")]
+        trace!(
+            "received response, endpoint: '{endpoint}', method: '{method}', status: '{}'",
+            status.as_u16()
+        );
+
+        if !status.is_success() {
+            return Err(ClientError::StatusCode(
+                status,
+                serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?,
+            ));
+        }
+
+        serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)
+    }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn get<T>(&self, endpoint: &str) -> Result<T, Self::Error>
+    async fn get<T>(&self, endpoint: X) -> Result<T, Self::Error>
     where
         T: DeserializeOwned + Debug + Send + Sync,
     {
-        let mut req = reqwest::Request::new(
-            Method::GET,
-            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
-        );
+        let url = endpoint.into_url().map_err(ClientError::Request)?;
+
+        let mut req = reqwest::Request::new(Method::GET, url);
 
         req.headers_mut().insert(header::ACCEPT_CHARSET, UTF8);
 
@@ -625,7 +613,7 @@ impl RestClient for Client {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn post<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    async fn post<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
         T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync,
@@ -634,7 +622,7 @@ impl RestClient for Client {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn put<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    async fn put<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
         T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync,
@@ -643,7 +631,7 @@ impl RestClient for Client {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn patch<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    async fn patch<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
         T: ?Sized + Serialize + Debug + Send + Sync,
         U: DeserializeOwned + Debug + Send + Sync,
@@ -652,11 +640,9 @@ impl RestClient for Client {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn delete(&self, endpoint: &str) -> Result<(), Self::Error> {
-        let req = reqwest::Request::new(
-            Method::DELETE,
-            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
-        );
+    async fn delete(&self, endpoint: X) -> Result<(), Self::Error> {
+        let url = endpoint.into_url().map_err(ClientError::Request)?;
+        let req = reqwest::Request::new(Method::DELETE, url);
 
         let res = self.execute(req).await?;
         let status = res.status();

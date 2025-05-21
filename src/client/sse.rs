@@ -28,7 +28,7 @@ use reqwest::{
 use tracing::trace;
 use url::Url;
 
-use super::Request;
+use super::Execute;
 
 pub type SseErrorOf<C, K, V> =
     SseError<<C as Execute>::Error, <K as FromStr>::Err, <V as FromStr>::Err>;
@@ -504,7 +504,7 @@ impl<E> fmt::Debug for SseState<E> {
 
 /// Stream of Server-Sent [`Event`]s.
 #[derive(Debug)]
-pub struct SseStream<C: Request, K = String, V = String> {
+pub struct SseStream<C: Execute, K = String, V = String> {
     state: SseState<C::Error>,
     parser: EventParser<K, V>,
     max_retry: Option<(u64, u64)>,
@@ -513,7 +513,7 @@ pub struct SseStream<C: Request, K = String, V = String> {
     client: C,
 }
 
-impl<C: Request, K, V> SseStream<C, K, V> {
+impl<C: Execute, K, V> SseStream<C, K, V> {
     pub fn builder<U: IntoUrl>(client: C, endpoint: U) -> SseStreamBuilder<C, K, V> {
         SseStreamBuilder::new(client, endpoint.into_url())
     }
@@ -537,8 +537,8 @@ impl<C: Request, K, V> SseStream<C, K, V> {
     }
 }
 
-impl<C: Request + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
-    type Item = Result<Event<K, V>, SseError<C::Error, K::Err, V::Err>>;
+impl<C: Execute + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
+    type Item = SseResult<C, K, V>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
@@ -660,7 +660,7 @@ impl<C: Request + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
     }
 }
 
-impl<C: Request + Unpin, K: FromStr, V: FromStr> FusedStream for SseStream<C, K, V> {
+impl<C: Execute + Unpin, K: FromStr, V: FromStr> FusedStream for SseStream<C, K, V> {
     fn is_terminated(&self) -> bool {
         matches!(self.state, SseState::Closed)
     }
@@ -766,7 +766,7 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     pub fn stream(self) -> SseBuildResult<C, K, V>
     where
-        C: Request + fmt::Debug,
+        C: Execute + fmt::Debug,
         K: FromStr,
         V: FromStr,
     {
@@ -856,7 +856,7 @@ pub trait SseClient<U> {
     }
 }
 
-impl<T: Request + fmt::Debug + Clone, U: IntoUrl> SseClient<U> for T {
+impl<T: Execute + fmt::Debug + Clone, U: IntoUrl> SseClient<U> for T {
     fn sse<K, V>(&self, endpoint: U) -> SseStreamBuilder<Self, K, V>
     where
         K: FromStr + fmt::Debug + Send + 'static,
