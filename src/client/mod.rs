@@ -4,11 +4,10 @@
 //! to interact with the Clever-Cloud's api, but has been extended to be more
 //! generic.
 
+use core::{error::Error, fmt, future::Future};
+
 use std::{
     collections::BTreeMap,
-    error::Error,
-    fmt::{self, Debug, Display, Formatter},
-    future::Future,
     time::{SystemTime, SystemTimeError},
 };
 #[cfg(feature = "metrics")]
@@ -94,12 +93,12 @@ pub trait RestClient<X>: Execute {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
-    fn get<T>(&self, endpoint: X) -> impl Future<Output = Result<T, Self::Error>> + Send
+    fn get<U>(&self, endpoint: X) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: DeserializeOwned + Debug + Send + Sync;
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
     fn post<T, U>(
         &self,
@@ -107,8 +106,8 @@ pub trait RestClient<X>: Execute {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
     fn put<T, U>(
         &self,
@@ -116,8 +115,8 @@ pub trait RestClient<X>: Execute {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
     fn patch<T, U>(
         &self,
@@ -125,16 +124,16 @@ pub trait RestClient<X>: Execute {
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
     fn delete(&self, endpoint: X) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // -----------------------------------------------------------------------------
-// ClientCredentials structure
+// Credentials structure
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Credentials {
     OAuth1 {
@@ -160,7 +159,7 @@ pub enum Credentials {
 }
 
 impl fmt::Debug for Credentials {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // NOTE: ensure secrets are not leaked in logs
         match self {
             Self::OAuth1 { .. } => f.write_str("OAuth1"),
@@ -221,7 +220,7 @@ pub const OAUTH1_VERSION: &str = "oauth_version";
 pub const OAUTH1_VERSION_1: &str = "1.0";
 pub const OAUTH1_TOKEN: &str = "oauth_token";
 
-pub trait OAuth1: Debug {
+pub trait OAuth1: fmt::Debug {
     type Error;
 
     // `params` returns OAuth1 parameters without the signature one
@@ -258,7 +257,7 @@ pub trait OAuth1: Debug {
 // -----------------------------------------------------------------------------
 // ResponseError structure
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseError {
     #[serde(rename = "id")]
     pub id: u32,
@@ -268,8 +267,8 @@ pub struct ResponseError {
     pub kind: String,
 }
 
-impl Display for ResponseError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+impl fmt::Display for ResponseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
             "got response {} ({}), {}",
@@ -283,7 +282,7 @@ impl Error for ResponseError {}
 // -----------------------------------------------------------------------------
 // SignerError enum
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SignerError {
     #[error("failed to compute invalid key length, {0}")]
     Digest(InvalidLength),
@@ -300,7 +299,7 @@ pub enum SignerError {
 // -----------------------------------------------------------------------------
 // Signer structure
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signer {
     pub nonce: String,
     pub timestamp: u64,
@@ -421,7 +420,7 @@ impl TryFrom<Credentials> for Signer {
 // -----------------------------------------------------------------------------
 // ClientError enum
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("failed to execute request, {0}")]
     Request(reqwest::Error),
@@ -448,7 +447,7 @@ pub const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/
 
 pub const UTF8: HeaderValue = HeaderValue::from_static("utf-8");
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct Client {
     inner: reqwest::Client,
     credentials: Option<Credentials>,
@@ -545,8 +544,8 @@ impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
         payload: &T,
     ) -> Result<U, Self::Error>
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
 
@@ -586,9 +585,9 @@ impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn get<T>(&self, endpoint: X) -> Result<T, Self::Error>
+    async fn get<U>(&self, endpoint: X) -> Result<U, Self::Error>
     where
-        T: DeserializeOwned + Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         let url = endpoint.into_url().map_err(ClientError::Request)?;
 
@@ -615,8 +614,8 @@ impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn post<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         self.request(&Method::POST, endpoint, payload).await
     }
@@ -624,8 +623,8 @@ impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn put<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         self.request(&Method::PUT, endpoint, payload).await
     }
@@ -633,8 +632,8 @@ impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     async fn patch<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         self.request(&Method::PATCH, endpoint, payload).await
     }

@@ -111,7 +111,7 @@ pub struct Event<K = String, V = String> {
 
 // EVENT PARSER ////////////////////////////////////////////////////////////////
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Eol {
     // carriage return (`\r`) or line feed (`\n`)
     CrOrLf = 1,
@@ -378,7 +378,7 @@ impl fmt::Display for EventId {
 ///
 /// Specialized [`fmt::Display`] implementation that escapes newlines in serial
 /// JSON representation for Server-Sent Events (SSE) streaming compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Json<T = serde_json::Value>(pub T);
 
 impl<T: PartialEq> PartialEq<T> for Json<T> {
@@ -682,7 +682,7 @@ pub struct SseStreamBuilder<C, K = String, V = String> {
 }
 
 impl<C: fmt::Debug, K, V> fmt::Debug for SseStreamBuilder<C, K, V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SseStreamBuilder")
             .field("client", &self.client)
             .field("endpoint", &self.endpoint)
