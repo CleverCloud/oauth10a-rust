@@ -135,7 +135,7 @@ pub trait RestClient: Debug {
 // -----------------------------------------------------------------------------
 // ClientCredentials structure
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(untagged)]
 pub enum Credentials {
     OAuth1 {
@@ -158,6 +158,17 @@ pub enum Credentials {
         #[serde(rename = "token")]
         token: String,
     },
+}
+
+impl fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // NOTE: ensure secrets are not leaked in logs
+        match self {
+            Self::OAuth1 { .. } => f.write_str("OAuth1"),
+            Self::Basic { .. } => f.write_str("Basic"),
+            Self::Bearer { .. } => f.write_str("Bearer"),
+        }
+    }
 }
 
 impl Default for Credentials {
