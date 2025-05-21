@@ -30,13 +30,13 @@ use url::Url;
 
 use super::Request;
 
-pub type SseResult<C, K = String, V = String> =
-    Result<Event<K, V>, SseError<<C as Request>::Error, <K as FromStr>::Err, <V as FromStr>::Err>>;
+pub type SseErrorOf<C, K, V> =
+    SseError<<C as Execute>::Error, <K as FromStr>::Err, <V as FromStr>::Err>;
 
-pub type SseBuildResult<C, K = String, V = String> = Result<
-    SseStream<C, K, V>,
-    SseError<<C as Request>::Error, <K as FromStr>::Err, <V as FromStr>::Err>,
->;
+pub type SseResult<C, K = String, V = String> = Result<Event<K, V>, SseErrorOf<C, K, V>>;
+
+pub type SseBuildResult<C, K = String, V = String> =
+    Result<SseStream<C, K, V>, SseErrorOf<C, K, V>>;
 
 /// Default initial capacity of the buffer of the [`SseStream`].
 pub const DEFAULT_INITIAL_CAPACITY: usize = 512;
