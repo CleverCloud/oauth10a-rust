@@ -333,30 +333,24 @@ impl OAuth1 for Signer {
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
-        let (host, query) = match endpoint.find('?') {
-            None => (endpoint, ""),
-            // split one character further to not get the '?' character
-            Some(position) => endpoint.split_at(position),
-        };
-
-        let query = query.strip_prefix('?').unwrap_or(query);
         let mut params = self.params();
 
-        if !query.is_empty() {
-            for qparam in query.split('&') {
-                let (k, v) = qparam.split_at(qparam.find('=').ok_or_else(|| {
-                    SignerError::Parse(format!("failed to parse query parameter, {qparam}"))
-                })?);
-
-                if !params.contains_key(k) {
-                    params.insert(k.to_string(), v.strip_prefix('=').unwrap_or(v).to_owned());
+        let host = match endpoint.split_once('?') {
+            None => endpoint,
+            Some((host, query)) => {
+                for qparam in query.split('&') {
+                    let (k, v) = qparam.split_once('=').ok_or_else(|| {
+                        SignerError::Parse(format!("failed to parse query parameter, {qparam}"))
+                    })?;
+                    params.entry(k.to_owned()).or_insert(v.to_owned());
                 }
+                host
             }
-        }
+        };
 
         let mut params = params
             .iter()
-            .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+            .map(|(k, v)| format!("{k}={}", urlencoding::encode(v)))
             .collect::<Vec<_>>();
 
         params.sort();
