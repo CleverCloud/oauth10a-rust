@@ -4,9 +4,10 @@
 //! to interact with the Clever-Cloud's api, but has been extended to be more
 //! generic.
 
-use core::{error::Error, fmt, future::Future};
+use core::{error::Error, fmt, future::Future, time::Duration};
 
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     time::{SystemTime, SystemTimeError},
 };
@@ -224,7 +225,7 @@ pub trait OAuth1: fmt::Debug {
     type Error;
 
     // `params` returns OAuth1 parameters without the signature one
-    fn params(&self) -> BTreeMap<String, String>;
+    fn params(&self) -> BTreeMap<Cow<'_, str>, Cow<'_, str>>;
 
     // `signature` returns the computed signature from given parameters
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error>;
@@ -238,9 +239,9 @@ pub trait OAuth1: fmt::Debug {
         let signature = self.signature(method, endpoint)?;
         let mut params = self.params();
 
-        params.insert(
-            OAUTH1_SIGNATURE.to_string(),
-            urlencoding::encode(&signature).into_owned(),
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_SIGNATURE),
+            urlencoding::encode(&signature),
         );
 
         let mut base = params
@@ -299,41 +300,81 @@ pub enum SignerError {
 // -----------------------------------------------------------------------------
 // Signer structure
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signer {
-    pub nonce: String,
-    pub timestamp: u64,
-    pub token: String,
-    pub secret: String,
-    pub consumer_key: String,
-    pub consumer_secret: String,
+#[derive(Clone, PartialEq, Eq)]
+pub struct Signer<T = String> {
+    pub nonce: Uuid,
+    pub timestamp: Duration,
+    pub token: T,
+    pub secret: T,
+    pub consumer_key: T,
+    pub consumer_secret: T,
 }
 
-impl OAuth1 for Signer {
+impl<T> fmt::Debug for Signer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Signer")
+            .field("nonce", &self.nonce)
+            .field("timestamp", &self.timestamp)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: fmt::Debug> Signer<T> {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    fn new(token: T, secret: T, consumer_key: T, consumer_secret: T) -> Result<Self, SignerError> {
+        let nonce = Uuid::new_v4();
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(SignerError::UnixEpochTime)?;
+        Ok(Self {
+            nonce,
+            timestamp,
+            token,
+            secret,
+            consumer_key,
+            consumer_secret,
+        })
+    }
+}
+
+impl<T: AsRef<str> + fmt::Debug> OAuth1 for Signer<T> {
     type Error = SignerError;
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    fn params(&self) -> BTreeMap<String, String> {
+    fn params(&self) -> BTreeMap<Cow<'_, str>, Cow<'_, str>> {
         let mut params = BTreeMap::new();
-
-        params.insert(
-            OAUTH1_CONSUMER_KEY.to_string(),
-            self.consumer_key.to_string(),
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_CONSUMER_KEY),
+            self.consumer_key.as_ref().into(),
         );
-        params.insert(OAUTH1_NONCE.to_string(), self.nonce.to_string());
-        params.insert(
-            OAUTH1_SIGNATURE_METHOD.to_string(),
-            OAUTH1_SIGNATURE_HMAC_SHA512.to_string(),
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_NONCE),
+            Cow::Owned(self.nonce.to_string()),
         );
-        params.insert(OAUTH1_TIMESTAMP.to_string(), self.timestamp.to_string());
-        params.insert(OAUTH1_VERSION.to_string(), OAUTH1_VERSION_1.to_string());
-        params.insert(OAUTH1_TOKEN.to_string(), self.token.to_string());
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_SIGNATURE_METHOD),
+            Cow::Borrowed(OAUTH1_SIGNATURE_HMAC_SHA512),
+        );
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_TIMESTAMP),
+            Cow::Owned(self.timestamp.as_secs().to_string()),
+        );
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_VERSION),
+            Cow::Borrowed(OAUTH1_VERSION_1),
+        );
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_TOKEN),
+            Cow::Borrowed(self.token.as_ref()),
+        );
         params
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
         let mut params = self.params();
+
+        // TODO: we could use query_pairs on Url
 
         let host = match endpoint.split_once('?') {
             None => endpoint,
@@ -342,7 +383,7 @@ impl OAuth1 for Signer {
                     let (k, v) = qparam.split_once('=').ok_or_else(|| {
                         SignerError::Parse(format!("failed to parse query parameter, {qparam}"))
                     })?;
-                    params.entry(k.to_owned()).or_insert(v.to_owned());
+                    let _ = params.entry(Cow::Borrowed(k)).or_insert(Cow::Borrowed(v));
                 }
                 host
             }
@@ -375,8 +416,8 @@ impl OAuth1 for Signer {
     fn signing_key(&self) -> String {
         format!(
             "{}&{}",
-            urlencoding::encode(&self.consumer_secret),
-            urlencoding::encode(&self.secret)
+            urlencoding::encode(self.consumer_secret.as_ref()),
+            urlencoding::encode(self.secret.as_ref())
         )
     }
 }
@@ -386,26 +427,13 @@ impl TryFrom<Credentials> for Signer {
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn try_from(credentials: Credentials) -> Result<Self, Self::Error> {
-        let nonce = Uuid::new_v4().to_string();
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(SignerError::UnixEpochTime)?
-            .as_secs();
-
         match credentials {
             Credentials::OAuth1 {
                 token,
                 secret,
                 consumer_key,
                 consumer_secret,
-            } => Ok(Self {
-                nonce,
-                timestamp,
-                token,
-                secret,
-                consumer_key,
-                consumer_secret,
-            }),
+            } => Self::new(token, secret, consumer_key, consumer_secret),
             _ => Err(SignerError::InvalidCredentials),
         }
     }
@@ -432,6 +460,8 @@ pub enum ClientError {
     Digest(SignerError),
     #[error("failed to serialize signature as header value, {0}")]
     SerializeHeaderValue(header::InvalidHeaderValue),
+    #[error("too many headers")]
+    TooManyHeaders(#[from] reqwest::header::MaxSizeReached),
 }
 
 // -----------------------------------------------------------------------------
@@ -462,36 +492,33 @@ impl Execute for Client {
             let method = request.method().to_string();
             let endpoint = request.url().to_string();
 
-            if !request.headers().contains_key(&header::AUTHORIZATION) {
-                match &client.credentials {
-                    Some(Credentials::Bearer { token }) => {
-                        request.headers_mut().insert(
-                            header::AUTHORIZATION,
+            if let Some(credentials) = &client.credentials {
+                if let header::Entry::Vacant(vacant_entry) =
+                    request.headers_mut().entry(header::AUTHORIZATION)
+                {
+                    let header_value = match credentials {
+                        Credentials::OAuth1 {
+                            token,
+                            secret,
+                            consumer_key,
+                            consumer_secret,
+                        } => Signer::new(token, secret, consumer_key, consumer_secret)
+                            .map_err(ClientError::Signer)?
+                            .sign(&method, &endpoint)
+                            .map_err(ClientError::Digest)?
+                            .parse()
+                            .map_err(ClientError::SerializeHeaderValue)?,
+                        Credentials::Basic { username, password } => {
+                            let token = BASE64_ENGINE.encode(format!("{username}:{password}"));
+                            HeaderValue::from_str(&format!("Basic {token}"))
+                                .map_err(ClientError::SerializeHeaderValue)?
+                        }
+                        Credentials::Bearer { token } => {
                             HeaderValue::from_str(&format!("Bearer {token}"))
-                                .map_err(ClientError::SerializeHeaderValue)?,
-                        );
-                    }
-                    Some(Credentials::Basic { username, password }) => {
-                        let token = BASE64_ENGINE.encode(format!("{username}:{password}"));
-
-                        request.headers_mut().insert(
-                            header::AUTHORIZATION,
-                            HeaderValue::from_str(&format!("Basic {token}",))
-                                .map_err(ClientError::SerializeHeaderValue)?,
-                        );
-                    }
-                    Some(credentials) => {
-                        request.headers_mut().insert(
-                            header::AUTHORIZATION,
-                            Signer::try_from(credentials.to_owned())
-                                .map_err(ClientError::Signer)?
-                                .sign(&method, &endpoint)
-                                .map_err(ClientError::Digest)?
-                                .parse()
-                                .map_err(ClientError::SerializeHeaderValue)?,
-                        );
-                    }
-                    _ => {}
+                                .map_err(ClientError::SerializeHeaderValue)?
+                        }
+                    };
+                    let _ = vacant_entry.try_insert(header_value)?;
                 }
             }
 
@@ -551,10 +578,10 @@ impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
         let mut request = reqwest::Request::new(method.to_owned(), url);
 
         let headers = request.headers_mut();
-        headers.insert(header::CONTENT_TYPE, APPLICATION_JSON);
-        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()));
-        headers.insert(header::ACCEPT_CHARSET, UTF8);
-        headers.insert(header::ACCEPT, APPLICATION_JSON);
+        let _ = headers.try_insert(header::CONTENT_TYPE, APPLICATION_JSON)?;
+        let _ = headers.try_insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()))?;
+        let _ = headers.try_insert(header::ACCEPT_CHARSET, UTF8)?;
+        let _ = headers.try_insert(header::ACCEPT, APPLICATION_JSON)?;
 
         *request.body_mut() = Some(buf.into());
 
@@ -585,15 +612,18 @@ impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
     {
         let url = endpoint.into_url().map_err(ClientError::Request)?;
 
-        let mut req = reqwest::Request::new(Method::GET, url);
+        let mut request = reqwest::Request::new(Method::GET, url);
 
-        req.headers_mut().insert(header::ACCEPT_CHARSET, UTF8);
+        let headers = request.headers_mut();
+        let _ = headers.try_insert(header::ACCEPT_CHARSET, UTF8)?;
+        let _ = headers.try_insert(header::ACCEPT, APPLICATION_JSON)?;
 
-        req.headers_mut().insert(header::ACCEPT, APPLICATION_JSON);
-
-        let res = self.execute(req).await?;
-        let status = res.status();
-        let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
+        let response = self.execute(request).await?;
+        let status = response.status();
+        let buf = response
+            .bytes()
+            .await
+            .map_err(ClientError::BodyAggregation)?;
 
         if !status.is_success() {
             return Err(ClientError::StatusCode(

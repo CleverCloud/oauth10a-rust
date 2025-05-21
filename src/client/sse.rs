@@ -38,6 +38,8 @@ pub type SseResult<C, K = String, V = String> = Result<Event<K, V>, SseErrorOf<C
 pub type SseBuildResult<C, K = String, V = String> =
     Result<SseStream<C, K, V>, SseErrorOf<C, K, V>>;
 
+pub const MAX_CAPACITY: usize = isize::MAX as usize;
+
 /// Default initial capacity of the buffer of the [`SseStream`].
 pub const DEFAULT_INITIAL_CAPACITY: usize = 512;
 
@@ -154,7 +156,7 @@ impl<K, V> EventParser<K, V> {
         initial_capacity: usize,
         max_capacity: usize,
     ) -> Self {
-        let max_capacity = max_capacity.min(isize::MAX as usize);
+        let max_capacity = max_capacity.min(MAX_CAPACITY);
         let initial_capacity = initial_capacity.min(max_capacity);
         Self {
             buf: BytesMut::with_capacity(initial_capacity),
@@ -475,6 +477,8 @@ pub enum SseError<E, K = Infallible, V = Infallible> {
     /// Failed to parse [`Event`].
     #[error(transparent)]
     Parser(EventParseError<K, V>),
+    #[error("too many header")]
+    TooManyHeaders(#[from] reqwest::header::MaxSizeReached),
 }
 
 // SSE STATE ///////////////////////////////////////////////////////////////////
@@ -785,10 +789,8 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
         let mut request = reqwest::Request::new(Method::GET, url);
 
         let headers = request.headers_mut();
-
-        let _ = headers.insert(header::ACCEPT, TEXT_EVENT_STREAM);
-
-        let _ = headers.insert(header::CACHE_CONTROL, NO_STORE);
+        let _ = headers.try_insert(header::ACCEPT, TEXT_EVENT_STREAM)?;
+        let _ = headers.try_insert(header::CACHE_CONTROL, NO_STORE)?;
 
         if let Some(last_event_id) = last_event_id.header_value() {
             let _ = headers.insert(LAST_EVENT_ID, last_event_id);
@@ -796,10 +798,9 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
 
         // TODO: request's "initiator" type should be set to "other"
 
-        let first_request = match request.try_clone() {
-            None => return Err(SseError::RequestBodyNotCloneable),
-            Some(v) => v,
-        };
+        let first_request = request
+            .try_clone()
+            .ok_or(SseError::RequestBodyNotCloneable)?;
 
         Ok(SseStream {
             state: SseState::Connecting(client.execute(first_request).boxed()),
@@ -807,7 +808,7 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
                 request.url().clone(),
                 last_event_id,
                 initial_capacity,
-                max_capacity.unwrap_or(isize::MAX as usize),
+                max_capacity.unwrap_or(MAX_CAPACITY),
             ),
             max_retry: max_retry.map(|n| (n, n)),
             max_loop: max_loop.map(|n| (n, n)),
@@ -819,7 +820,7 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
 
 // SSE CLIENT //////////////////////////////////////////////////////////////////
 
-/// Extension trait for [`Request`]s clients that support subscribing to Server-Sent Events (SSE).
+/// Extension trait for HTTP clients that support subscribing to Server-Sent Events (SSE).
 pub trait SseClient<U> {
     /// Sends a GET HTTP request to the provided `endpoint`,
     /// which is expected to serve a stream of Server-Sent Events (SSE).
