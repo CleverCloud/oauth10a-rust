@@ -4,7 +4,10 @@ description = "A rust implementation of the oauth 1.0a protocol fully-async with
 version = "2.1.2"
 edition = "2024"
 rust-version = "1.85.0"
-authors = ["Florentin Dubois <florentin.dubois@clever-cloud.com>"]
+authors = [
+    "Florentin Dubois <florentin.dubois@clever.cloud>",
+    "Cédric Lemaire-Giroud <cedric.lemaire-giroud@clever.cloud>",
+]
 license-file = "LICENSE"
 readme = "README.md"
 repository = "https://github.com/CleverCloud/oauth10a-rust"
@@ -12,12 +15,33 @@ keywords = ["clevercloud", "client", "logging", "metrics", "oauth1a"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["logging", "client"]
+tracing = ["dep:tracing"]
+logging = ["log", "tracing/log-always"]
+metrics = ["dep:prometheus"]
+execute = []
+client = ["execute"]
+rest = ["execute", "dep:serde", "dep:serde_json"]
+sse = [
+    "execute",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:bytes",
+    "dep:futures",
+    "dep:mime",
+    "dep:memchr",
+    "dep:tokio",
+]
+serde = ["dep:serde"]
+zeroize = ["dep:zeroize"]
+
 [dependencies]
-base64 = { version = "^0.22.1", optional = true }
-bytes = { version = "^1.10.1", features = ["serde"], optional = true }
-crypto-common = { version = "^0.1.6", optional = true }
+base64 = { version = "^0.22.1" }
+bytes = { version = "^1.10.1", optional = true }
+crypto-common = { version = "^0.1.6" }
 futures = { version = "^0.3.31", optional = true }
-hmac = { version = "^0.12.1", features = ["std"], optional = true }
+hmac = { version = "^0.12.1" }
 log = { version = "^0.4.27", optional = true }
 memchr = { version = "^2.7.4", optional = true }
 mime = { version = "^0.3.17", optional = true }
@@ -32,46 +56,24 @@ reqwest = { version = "^0.12.15", default-features = true, features = [
     "json",
     "hickory-dns",
     "stream",
-], optional = true }
+] }
 serde = { version = "^1.0.219", features = ["derive"], optional = true }
 serde_json = { version = "^1.0.140", features = [
     "preserve_order",
     "float_roundtrip",
 ], optional = true }
-sha2 = { version = "^0.10.9", optional = true }
-thiserror = { version = "^2.0.12", optional = true }
-tokio = { version = "^1.44.2", optional = true, default-features = false, features = [
+sha2 = { version = "^0.10.9" }
+thiserror = { version = "^2.0.12" }
+tokio = { version = "^1.45.1", optional = true, default-features = false, features = [
     "time",
 ] }
 tracing = { version = "^0.1.41", optional = true }
-url = { version = "^2.5.4", default-features = false, features = [
-    "serde",
-], optional = true }
-urlencoding = { version = "^2.1.3", optional = true }
-uuid = { version = "^1.16.0", features = ["serde", "v4"], optional = true }
+url = { version = "2.5.4", features = ["serde"] }
+urlencoding = { version = "^2.1.3" }
+uuid = { version = "^1.17.0", features = ["serde", "v4"] }
+zeroize = { version = "^1.8.1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 anyhow = { version = "^1.0.98" }
 axum = { version = "^0.8.4" }
-tokio = { version = "^1.44.2", features = ["full"] }
-
-[features]
-default = ["client", "logging"]
-client = [
-    "base64",
-    "bytes",
-    "crypto-common",
-    "hmac",
-    "reqwest",
-    "serde",
-    "serde_json",
-    "sha2",
-    "thiserror",
-    "url",
-    "urlencoding",
-    "uuid",
-]
-logging = ["log", "tracing/log-always"]
-tracing = ["dep:tracing"]
-metrics = ["prometheus"]
-sse = ["dep:futures", "dep:mime", "dep:memchr", "dep:tokio"]
+tokio = { version = "^1.45.1", features = ["full"] }
