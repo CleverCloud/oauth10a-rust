@@ -40,7 +40,7 @@ serde_json = { version = "^1.0.140", features = [
 ], optional = true }
 sha2 = { version = "^0.10.9", optional = true }
 thiserror = { version = "^2.0.12", optional = true }
-tokio = { version = "^1.44.2", optional = true, default-features = false, features = [
+tokio = { version = "^1.45.0", optional = true, default-features = false, features = [
     "time",
 ] }
 tracing = { version = "^0.1.41", optional = true }
@@ -48,15 +48,15 @@ url = { version = "^2.5.4", default-features = false, features = [
     "serde",
 ], optional = true }
 urlencoding = { version = "^2.1.3", optional = true }
-uuid = { version = "^1.16.0", features = ["serde", "v4"], optional = true }
+uuid = { version = "^1.17.0", features = ["serde", "v4"], optional = true }
 
 [dev-dependencies]
 anyhow = { version = "^1.0.98" }
 axum = { version = "^0.8.4" }
-tokio = { version = "^1.44.2", features = ["full"] }
+tokio = { version = "^1.45.0", features = ["full"] }
 
 [features]
-default = ["client", "logging"]
+default = ["client", "logging", "rest", "sse"]
 client = [
     "base64",
     "bytes",
@@ -74,4 +74,5 @@ client = [
 logging = ["log", "tracing/log-always"]
 tracing = ["dep:tracing"]
 metrics = ["prometheus"]
+rest = []
 sse = ["dep:futures", "dep:mime", "dep:memchr", "dep:tokio"]
