@@ -4,11 +4,11 @@
 //! to interact with the Clever-Cloud's api, but has been extended to be more
 //! generic.
 
+use core::{error::Error, fmt, future::Future, time::Duration};
+
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
-    error::Error,
-    fmt::{self, Debug, Display, Formatter},
-    future::Future,
     time::{SystemTime, SystemTimeError},
 };
 #[cfg(feature = "metrics")]
@@ -19,11 +19,11 @@ use bytes::Buf;
 use crypto_common::InvalidLength;
 use hmac::{Hmac, Mac};
 #[cfg(feature = "logging")]
-use log::{Level, error, log_enabled, trace};
+use log::{error, trace};
 #[cfg(feature = "metrics")]
 use prometheus::{CounterVec, opts, register_counter_vec};
 use reqwest::{
-    Method, StatusCode,
+    IntoUrl, Method, StatusCode,
     header::{self, HeaderValue},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -71,20 +71,11 @@ static CLIENT_REQUEST_DURATION: LazyLock<CounterVec> = LazyLock::new(|| {
 type HmacSha512 = Hmac<Sha512>;
 
 // -----------------------------------------------------------------------------
-// Request trait
+// Execute trait
 
-pub trait Request {
+/// Execute HTTP requests.
+pub trait Execute {
     type Error;
-
-    fn request<T, U>(
-        &self,
-        method: &Method,
-        endpoint: &str,
-        payload: &T,
-    ) -> impl Future<Output = Result<U, Self::Error>> + Send
-    where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
 
     fn execute(
         &self,
@@ -95,47 +86,55 @@ pub trait Request {
 // -----------------------------------------------------------------------------
 // RestClient trait
 
-pub trait RestClient: Debug {
-    type Error;
-
-    fn get<T>(&self, endpoint: &str) -> impl Future<Output = Result<T, Self::Error>> + Send
+pub trait RestClient<X>: Execute {
+    fn request<T, U>(
+        &self,
+        method: &Method,
+        endpoint: X,
+        payload: &T,
+    ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
+
+    fn get<U>(&self, endpoint: X) -> impl Future<Output = Result<U, Self::Error>> + Send
+    where
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
     fn post<T, U>(
         &self,
-        endpoint: &str,
+        endpoint: X,
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
     fn put<T, U>(
         &self,
-        endpoint: &str,
+        endpoint: X,
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
     fn patch<T, U>(
         &self,
-        endpoint: &str,
+        endpoint: X,
         payload: &T,
     ) -> impl Future<Output = Result<U, Self::Error>> + Send
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync;
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync;
 
-    fn delete(&self, endpoint: &str) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn delete(&self, endpoint: X) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // -----------------------------------------------------------------------------
-// ClientCredentials structure
+// Credentials structure
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Credentials {
     OAuth1 {
@@ -158,6 +157,17 @@ pub enum Credentials {
         #[serde(rename = "token")]
         token: String,
     },
+}
+
+impl fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // NOTE: ensure secrets are not leaked in logs
+        match self {
+            Self::OAuth1 { .. } => f.write_str("OAuth1"),
+            Self::Basic { .. } => f.write_str("Basic"),
+            Self::Bearer { .. } => f.write_str("Bearer"),
+        }
+    }
 }
 
 impl Default for Credentials {
@@ -211,11 +221,11 @@ pub const OAUTH1_VERSION: &str = "oauth_version";
 pub const OAUTH1_VERSION_1: &str = "1.0";
 pub const OAUTH1_TOKEN: &str = "oauth_token";
 
-pub trait OAuth1: Debug {
+pub trait OAuth1: fmt::Debug {
     type Error;
 
     // `params` returns OAuth1 parameters without the signature one
-    fn params(&self) -> BTreeMap<String, String>;
+    fn params(&self) -> BTreeMap<Cow<'_, str>, Cow<'_, str>>;
 
     // `signature` returns the computed signature from given parameters
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error>;
@@ -229,9 +239,9 @@ pub trait OAuth1: Debug {
         let signature = self.signature(method, endpoint)?;
         let mut params = self.params();
 
-        params.insert(
-            OAUTH1_SIGNATURE.to_string(),
-            urlencoding::encode(&signature).into_owned(),
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_SIGNATURE),
+            urlencoding::encode(&signature),
         );
 
         let mut base = params
@@ -248,7 +258,7 @@ pub trait OAuth1: Debug {
 // -----------------------------------------------------------------------------
 // ResponseError structure
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseError {
     #[serde(rename = "id")]
     pub id: u32,
@@ -258,8 +268,8 @@ pub struct ResponseError {
     pub kind: String,
 }
 
-impl Display for ResponseError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+impl fmt::Display for ResponseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
             "got response {} ({}), {}",
@@ -273,7 +283,7 @@ impl Error for ResponseError {}
 // -----------------------------------------------------------------------------
 // SignerError enum
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SignerError {
     #[error("failed to compute invalid key length, {0}")]
     Digest(InvalidLength),
@@ -290,64 +300,98 @@ pub enum SignerError {
 // -----------------------------------------------------------------------------
 // Signer structure
 
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct Signer {
-    pub nonce: String,
-    pub timestamp: u64,
-    pub token: String,
-    pub secret: String,
-    pub consumer_key: String,
-    pub consumer_secret: String,
+#[derive(Clone, PartialEq, Eq)]
+pub struct Signer<T = String> {
+    pub nonce: Uuid,
+    pub timestamp: Duration,
+    pub token: T,
+    pub secret: T,
+    pub consumer_key: T,
+    pub consumer_secret: T,
 }
 
-impl OAuth1 for Signer {
+impl<T> fmt::Debug for Signer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Signer")
+            .field("nonce", &self.nonce)
+            .field("timestamp", &self.timestamp)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: fmt::Debug> Signer<T> {
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    fn new(token: T, secret: T, consumer_key: T, consumer_secret: T) -> Result<Self, SignerError> {
+        let nonce = Uuid::new_v4();
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(SignerError::UnixEpochTime)?;
+        Ok(Self {
+            nonce,
+            timestamp,
+            token,
+            secret,
+            consumer_key,
+            consumer_secret,
+        })
+    }
+}
+
+impl<T: AsRef<str> + fmt::Debug> OAuth1 for Signer<T> {
     type Error = SignerError;
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    fn params(&self) -> BTreeMap<String, String> {
+    fn params(&self) -> BTreeMap<Cow<'_, str>, Cow<'_, str>> {
         let mut params = BTreeMap::new();
-
-        params.insert(
-            OAUTH1_CONSUMER_KEY.to_string(),
-            self.consumer_key.to_string(),
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_CONSUMER_KEY),
+            self.consumer_key.as_ref().into(),
         );
-        params.insert(OAUTH1_NONCE.to_string(), self.nonce.to_string());
-        params.insert(
-            OAUTH1_SIGNATURE_METHOD.to_string(),
-            OAUTH1_SIGNATURE_HMAC_SHA512.to_string(),
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_NONCE),
+            Cow::Owned(self.nonce.to_string()),
         );
-        params.insert(OAUTH1_TIMESTAMP.to_string(), self.timestamp.to_string());
-        params.insert(OAUTH1_VERSION.to_string(), OAUTH1_VERSION_1.to_string());
-        params.insert(OAUTH1_TOKEN.to_string(), self.token.to_string());
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_SIGNATURE_METHOD),
+            Cow::Borrowed(OAUTH1_SIGNATURE_HMAC_SHA512),
+        );
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_TIMESTAMP),
+            Cow::Owned(self.timestamp.as_secs().to_string()),
+        );
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_VERSION),
+            Cow::Borrowed(OAUTH1_VERSION_1),
+        );
+        let _ = params.insert(
+            Cow::Borrowed(OAUTH1_TOKEN),
+            Cow::Borrowed(self.token.as_ref()),
+        );
         params
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn signature(&self, method: &str, endpoint: &str) -> Result<String, Self::Error> {
-        let (host, query) = match endpoint.find('?') {
-            None => (endpoint, ""),
-            // split one character further to not get the '?' character
-            Some(position) => endpoint.split_at(position),
-        };
-
-        let query = query.strip_prefix('?').unwrap_or(query);
         let mut params = self.params();
 
-        if !query.is_empty() {
-            for qparam in query.split('&') {
-                let (k, v) = qparam.split_at(qparam.find('=').ok_or_else(|| {
-                    SignerError::Parse(format!("failed to parse query parameter, {qparam}"))
-                })?);
+        // TODO: we could use query_pairs on Url
 
-                if !params.contains_key(k) {
-                    params.insert(k.to_string(), v.strip_prefix('=').unwrap_or(v).to_owned());
+        let host = match endpoint.split_once('?') {
+            None => endpoint,
+            Some((host, query)) => {
+                for qparam in query.split('&') {
+                    let (k, v) = qparam.split_once('=').ok_or_else(|| {
+                        SignerError::Parse(format!("failed to parse query parameter, {qparam}"))
+                    })?;
+                    let _ = params.entry(Cow::Borrowed(k)).or_insert(Cow::Borrowed(v));
                 }
+                host
             }
-        }
+        };
 
         let mut params = params
             .iter()
-            .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+            .map(|(k, v)| format!("{k}={}", urlencoding::encode(v)))
             .collect::<Vec<_>>();
 
         params.sort();
@@ -372,8 +416,8 @@ impl OAuth1 for Signer {
     fn signing_key(&self) -> String {
         format!(
             "{}&{}",
-            urlencoding::encode(&self.consumer_secret),
-            urlencoding::encode(&self.secret)
+            urlencoding::encode(self.consumer_secret.as_ref()),
+            urlencoding::encode(self.secret.as_ref())
         )
     }
 }
@@ -383,26 +427,13 @@ impl TryFrom<Credentials> for Signer {
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     fn try_from(credentials: Credentials) -> Result<Self, Self::Error> {
-        let nonce = Uuid::new_v4().to_string();
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(SignerError::UnixEpochTime)?
-            .as_secs();
-
         match credentials {
             Credentials::OAuth1 {
                 token,
                 secret,
                 consumer_key,
                 consumer_secret,
-            } => Ok(Self {
-                nonce,
-                timestamp,
-                token,
-                secret,
-                consumer_key,
-                consumer_secret,
-            }),
+            } => Self::new(token, secret, consumer_key, consumer_secret),
             _ => Err(SignerError::InvalidCredentials),
         }
     }
@@ -411,7 +442,7 @@ impl TryFrom<Credentials> for Signer {
 // -----------------------------------------------------------------------------
 // ClientError enum
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("failed to execute request, {0}")]
     Request(reqwest::Error),
@@ -429,8 +460,8 @@ pub enum ClientError {
     Digest(SignerError),
     #[error("failed to serialize signature as header value, {0}")]
     SerializeHeaderValue(header::InvalidHeaderValue),
-    #[error("failed to parse url endpoint, {0}")]
-    ParseUrlEndpoint(url::ParseError),
+    #[error("failed to insert header in request: too many entries")]
+    TooManyHeaders(#[from] reqwest::header::MaxSizeReached),
 }
 
 // -----------------------------------------------------------------------------
@@ -440,111 +471,54 @@ pub const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/
 
 pub const UTF8: HeaderValue = HeaderValue::from_static("utf-8");
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct Client {
     inner: reqwest::Client,
     credentials: Option<Credentials>,
 }
 
-impl Request for Client {
+impl Execute for Client {
     type Error = ClientError;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn request<T, U>(
-        &self,
-        method: &Method,
-        endpoint: &str,
-        payload: &T,
-    ) -> Result<U, Self::Error>
-    where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
-    {
-        let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
-        let mut request = reqwest::Request::new(
-            method.to_owned(),
-            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
-        );
-
-        request
-            .headers_mut()
-            .insert(header::CONTENT_TYPE, APPLICATION_JSON);
-
-        request
-            .headers_mut()
-            .insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()));
-
-        request.headers_mut().insert(header::ACCEPT_CHARSET, UTF8);
-
-        request
-            .headers_mut()
-            .insert(header::ACCEPT, APPLICATION_JSON);
-
-        *request.body_mut() = Some(buf.into());
-
-        let res = self.execute(request).await?;
-        let status = res.status();
-        let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
-
-        #[cfg(feature = "logging")]
-        if log_enabled!(Level::Trace) {
-            trace!(
-                "received response, endpoint: '{endpoint}', method: '{method}', status: '{}'",
-                status.as_u16()
-            );
-        }
-
-        if !status.is_success() {
-            return Err(ClientError::StatusCode(
-                status,
-                serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?,
-            ));
-        }
-
-        serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)
-    }
-
+    /// Executes the given HTTP `request`.
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     fn execute(
         &self,
         mut request: reqwest::Request,
-    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + 'static {
+    ) -> impl Future<Output = Result<reqwest::Response, Self::Error>> + Send + 'static {
         let client = self.clone();
 
         async move {
             let method = request.method().to_string();
             let endpoint = request.url().to_string();
 
-            if !request.headers().contains_key(&header::AUTHORIZATION) {
-                match &client.credentials {
-                    Some(Credentials::Bearer { token }) => {
-                        request.headers_mut().insert(
-                            header::AUTHORIZATION,
+            if let Some(credentials) = &client.credentials {
+                if let header::Entry::Vacant(vacant_entry) =
+                    request.headers_mut().entry(header::AUTHORIZATION)
+                {
+                    let header_value = match credentials {
+                        Credentials::OAuth1 {
+                            token,
+                            secret,
+                            consumer_key,
+                            consumer_secret,
+                        } => Signer::new(token, secret, consumer_key, consumer_secret)
+                            .map_err(ClientError::Signer)?
+                            .sign(&method, &endpoint)
+                            .map_err(ClientError::Digest)?
+                            .parse()
+                            .map_err(ClientError::SerializeHeaderValue)?,
+                        Credentials::Basic { username, password } => {
+                            let token = BASE64_ENGINE.encode(format!("{username}:{password}"));
+                            HeaderValue::from_str(&format!("Basic {token}"))
+                                .map_err(ClientError::SerializeHeaderValue)?
+                        }
+                        Credentials::Bearer { token } => {
                             HeaderValue::from_str(&format!("Bearer {token}"))
-                                .map_err(ClientError::SerializeHeaderValue)?,
-                        );
-                    }
-                    Some(Credentials::Basic { username, password }) => {
-                        let token = BASE64_ENGINE.encode(format!("{username}:{password}"));
-
-                        request.headers_mut().insert(
-                            header::AUTHORIZATION,
-                            HeaderValue::from_str(&format!("Basic {token}",))
-                                .map_err(ClientError::SerializeHeaderValue)?,
-                        );
-                    }
-                    Some(credentials) => {
-                        request.headers_mut().insert(
-                            header::AUTHORIZATION,
-                            Signer::try_from(credentials.to_owned())
-                                .map_err(ClientError::Signer)?
-                                .sign(&method, &endpoint)
-                                .map_err(ClientError::Digest)?
-                                .parse()
-                                .map_err(ClientError::SerializeHeaderValue)?,
-                        );
-                    }
-                    _ => {}
+                                .map_err(ClientError::SerializeHeaderValue)?
+                        }
+                    };
+                    let _ = vacant_entry.try_insert(header_value)?;
                 }
             }
 
@@ -582,26 +556,44 @@ impl Request for Client {
     }
 }
 
-impl RestClient for Client {
-    type Error = ClientError;
-
+impl<X: IntoUrl + fmt::Debug + Send> RestClient<X> for Client {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn get<T>(&self, endpoint: &str) -> Result<T, Self::Error>
+    async fn request<T, U>(
+        &self,
+        method: &Method,
+        endpoint: X,
+        payload: &T,
+    ) -> Result<U, Self::Error>
     where
-        T: DeserializeOwned + Debug + Send + Sync,
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
-        let mut req = reqwest::Request::new(
-            Method::GET,
-            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
-        );
+        let buf = serde_json::to_vec(payload).map_err(ClientError::Serialize)?;
 
-        req.headers_mut().insert(header::ACCEPT_CHARSET, UTF8);
+        let url = endpoint.into_url().map_err(ClientError::Request)?;
 
-        req.headers_mut().insert(header::ACCEPT, APPLICATION_JSON);
+        #[cfg(feature = "logging")]
+        let endpoint = url.as_str().to_owned();
 
-        let res = self.execute(req).await?;
+        let mut request = reqwest::Request::new(method.to_owned(), url);
+
+        let headers = request.headers_mut();
+        let _ = headers.try_insert(header::CONTENT_TYPE, APPLICATION_JSON)?;
+        let _ = headers.try_insert(header::CONTENT_LENGTH, HeaderValue::from(buf.len()))?;
+        let _ = headers.try_insert(header::ACCEPT_CHARSET, UTF8)?;
+        let _ = headers.try_insert(header::ACCEPT, APPLICATION_JSON)?;
+
+        *request.body_mut() = Some(buf.into());
+
+        let res = self.execute(request).await?;
         let status = res.status();
         let buf = res.bytes().await.map_err(ClientError::BodyAggregation)?;
+
+        #[cfg(feature = "logging")]
+        trace!(
+            "received response, endpoint: '{endpoint}', method: '{method}', status: '{}'",
+            status.as_u16()
+        );
 
         if !status.is_success() {
             return Err(ClientError::StatusCode(
@@ -614,38 +606,66 @@ impl RestClient for Client {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn post<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    async fn get<U>(&self, endpoint: X) -> Result<U, Self::Error>
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
+    {
+        let url = endpoint.into_url().map_err(ClientError::Request)?;
+
+        let mut request = reqwest::Request::new(Method::GET, url);
+
+        let headers = request.headers_mut();
+        let _ = headers.try_insert(header::ACCEPT_CHARSET, UTF8)?;
+        let _ = headers.try_insert(header::ACCEPT, APPLICATION_JSON)?;
+
+        let response = self.execute(request).await?;
+        let status = response.status();
+        let buf = response
+            .bytes()
+            .await
+            .map_err(ClientError::BodyAggregation)?;
+
+        if !status.is_success() {
+            return Err(ClientError::StatusCode(
+                status,
+                serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)?,
+            ));
+        }
+
+        serde_json::from_reader(buf.reader()).map_err(ClientError::Deserialize)
+    }
+
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    async fn post<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
+    where
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         self.request(&Method::POST, endpoint, payload).await
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn put<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    async fn put<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         self.request(&Method::PUT, endpoint, payload).await
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn patch<T, U>(&self, endpoint: &str, payload: &T) -> Result<U, Self::Error>
+    async fn patch<T, U>(&self, endpoint: X, payload: &T) -> Result<U, Self::Error>
     where
-        T: ?Sized + Serialize + Debug + Send + Sync,
-        U: DeserializeOwned + Debug + Send + Sync,
+        T: ?Sized + Serialize + fmt::Debug + Send + Sync,
+        U: DeserializeOwned + fmt::Debug + Send + Sync,
     {
         self.request(&Method::PATCH, endpoint, payload).await
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    async fn delete(&self, endpoint: &str) -> Result<(), Self::Error> {
-        let req = reqwest::Request::new(
-            Method::DELETE,
-            endpoint.parse().map_err(ClientError::ParseUrlEndpoint)?,
-        );
+    async fn delete(&self, endpoint: X) -> Result<(), Self::Error> {
+        let url = endpoint.into_url().map_err(ClientError::Request)?;
+        let req = reqwest::Request::new(Method::DELETE, url);
 
         let res = self.execute(req).await?;
         let status = res.status();
