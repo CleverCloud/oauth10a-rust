@@ -28,7 +28,7 @@ use reqwest::{
 use tracing::trace;
 use url::Url;
 
-use super::Execute;
+use crate::execute::Execute;
 
 pub type SseErrorOf<C, K, V> =
     SseError<<C as Execute>::Error, <K as FromStr>::Err, <V as FromStr>::Err>;
@@ -328,6 +328,7 @@ impl EventId {
     /// Also, since the event identifier is meant to be used as header value while
     /// reconnecting, we actually only accept byte values in range `32..=255`,
     /// excluding byte `127` (`DEL`), which corresponds to the ASCII visible charset.
+    #[must_use]
     pub fn new(id: &str) -> Option<Self> {
         match HeaderValue::from_str(id) {
             Ok(header_value) => Some(Self(header_value)),

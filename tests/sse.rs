@@ -21,8 +21,8 @@ mod sse_integration_tests {
         routing::get,
     };
     use futures::{FutureExt, Stream, StreamExt};
-    use oauth10a::client::{
-        Client,
+    use oauth10a::{
+        client::DefaultClient,
         sse::{self as sse_client, EventId, Json, SseClient},
     };
     use reqwest::StatusCode;
@@ -157,7 +157,7 @@ mod sse_integration_tests {
                 .data("Message 3"),
         ];
 
-        let client = Client::default();
+        let client = DefaultClient::default();
 
         let mut event_stream = client.untyped_sse(&endpoint).max_loop(0).stream()?;
 
@@ -290,7 +290,7 @@ mod sse_integration_tests {
             ),
         ];
 
-        let client = Client::default();
+        let client = DefaultClient::default();
 
         let mut event_stream = client
             .sse::<EventKind, Json<EventValue>>(&endpoint)
@@ -349,22 +349,24 @@ mod sse_integration_tests {
 
 #[cfg(feature = "sse")]
 mod sse_e2e_tests {
+    use std::sync::Arc;
+
     use anyhow::Result;
     use futures::StreamExt;
-    use oauth10a::client::{Client, Credentials, sse::SseClient};
+    use oauth10a::{client::DefaultClient, credentials::any, sse::SseClient};
     use tracing::warn;
 
-    fn oath_env() -> Option<Credentials> {
+    fn oath_env() -> Option<Arc<any::Credentials>> {
         if let Ok(token) = std::env::var("CC_TOKEN") {
             if let Ok(secret) = std::env::var("CC_SECRET") {
                 if let Ok(consumer_key) = std::env::var("CC_CONSUMER_KEY") {
                     if let Ok(consumer_secret) = std::env::var("CC_CONSUMER_SECRET") {
-                        return Some(Credentials::OAuth1 {
+                        return Some(Arc::new(any::Credentials::oauth1(
                             token,
                             secret,
                             consumer_key,
                             consumer_secret,
-                        });
+                        )));
                     }
                 }
             }
@@ -382,7 +384,7 @@ mod sse_e2e_tests {
         };
 
         let client = {
-            let mut client = Client::default();
+            let mut client = DefaultClient::default();
             client.set_credentials(Some(credentials));
             client
         };
