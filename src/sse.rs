@@ -13,30 +13,27 @@ use core::{
     time::Duration,
 };
 
-#[cfg(feature = "metrics")]
-use std::sync::LazyLock;
-
 use bytes::{Buf, Bytes, BytesMut};
 use futures::{FutureExt, Stream, StreamExt, ready, stream::FusedStream};
 use mime::Mime;
-#[cfg(feature = "metrics")]
-use prometheus::{CounterVec, opts, register_counter_vec};
 use reqwest::{
-    IntoUrl, Method, StatusCode,
+    IntoUrl, Method, StatusCode, Url,
     header::{self, HeaderName, HeaderValue},
 };
-use tracing::trace;
-use url::Url;
 
-use super::Request;
+use crate::execute::ExecuteRequest;
+#[cfg(feature = "metrics")]
+use crate::metrics;
 
-pub type SseResult<C, K = String, V = String> =
-    Result<Event<K, V>, SseError<<C as Request>::Error, <K as FromStr>::Err, <V as FromStr>::Err>>;
+pub type SseErrorOf<C, K = String, V = String> =
+    SseError<<C as ExecuteRequest>::Error, <K as FromStr>::Err, <V as FromStr>::Err>;
 
-pub type SseBuildResult<C, K = String, V = String> = Result<
-    SseStream<C, K, V>,
-    SseError<<C as Request>::Error, <K as FromStr>::Err, <V as FromStr>::Err>,
->;
+pub type SseResult<C, K = String, V = String> = Result<Event<K, V>, SseErrorOf<C, K, V>>;
+
+pub type SseBuildResult<C, K = String, V = String> =
+    Result<SseStream<C, K, V>, SseErrorOf<C, K, V>>;
+
+pub const MAX_CAPACITY: usize = isize::MAX as usize;
 
 /// Default initial capacity of the buffer of the [`SseStream`].
 pub const DEFAULT_INITIAL_CAPACITY: usize = 512;
@@ -57,17 +54,6 @@ const TEXT_EVENT_STREAM: HeaderValue = HeaderValue::from_static("text/event-stre
 const NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
 
 const LAST_EVENT_ID: HeaderName = HeaderName::from_static("last-event-id");
-
-// METRICS /////////////////////////////////////////////////////////////////////
-
-#[cfg(feature = "metrics")]
-static EVENT_COUNTER: LazyLock<CounterVec> = LazyLock::new(|| {
-    register_counter_vec!(
-        opts!("oauth10a_client_sse", "number of events on api"),
-        &["endpoint"]
-    )
-    .expect("metrics 'oauth10a_client_sse' to not be initialized")
-});
 
 // CAPACITY OVERFLOW ERROR /////////////////////////////////////////////////////
 
@@ -111,7 +97,7 @@ pub struct Event<K = String, V = String> {
 
 // EVENT PARSER ////////////////////////////////////////////////////////////////
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Eol {
     // carriage return (`\r`) or line feed (`\n`)
     CrOrLf = 1,
@@ -154,7 +140,7 @@ impl<K, V> EventParser<K, V> {
         initial_capacity: usize,
         max_capacity: usize,
     ) -> Self {
-        let max_capacity = max_capacity.min(isize::MAX as usize);
+        let max_capacity = max_capacity.min(MAX_CAPACITY);
         let initial_capacity = initial_capacity.min(max_capacity);
         Self {
             buf: BytesMut::with_capacity(initial_capacity),
@@ -326,6 +312,7 @@ impl EventId {
     /// Also, since the event identifier is meant to be used as header value while
     /// reconnecting, we actually only accept byte values in range `32..=255`,
     /// excluding byte `127` (`DEL`), which corresponds to the ASCII visible charset.
+    #[must_use]
     pub fn new(id: &str) -> Option<Self> {
         match HeaderValue::from_str(id) {
             Ok(header_value) => Some(Self(header_value)),
@@ -378,7 +365,7 @@ impl fmt::Display for EventId {
 ///
 /// Specialized [`fmt::Display`] implementation that escapes newlines in serial
 /// JSON representation for Server-Sent Events (SSE) streaming compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Json<T = serde_json::Value>(pub T);
 
 impl<T: PartialEq> PartialEq<T> for Json<T> {
@@ -387,7 +374,7 @@ impl<T: PartialEq> PartialEq<T> for Json<T> {
     }
 }
 
-impl<T: serde::de::DeserializeOwned> FromStr for Json<T> {
+impl<T: serde::de::DeserializeOwned> str::FromStr for Json<T> {
     type Err = serde_json::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -459,7 +446,7 @@ pub fn validate_content_type(response: &reqwest::Response) -> Result<(), Content
 pub enum SseError<E, K = Infallible, V = Infallible> {
     /// Client failed to execute the request.
     #[error(transparent)]
-    Execute(E),
+    ExecuteRequest(E),
     /// Request can't be cloned because it's body is a stream.
     #[error("request body is a stream")]
     RequestBodyNotCloneable,
@@ -475,6 +462,8 @@ pub enum SseError<E, K = Infallible, V = Infallible> {
     /// Failed to parse [`Event`].
     #[error(transparent)]
     Parser(EventParseError<K, V>),
+    #[error("too many header")]
+    TooManyHeaders(#[from] reqwest::header::MaxSizeReached),
 }
 
 // SSE STATE ///////////////////////////////////////////////////////////////////
@@ -504,7 +493,7 @@ impl<E> fmt::Debug for SseState<E> {
 
 /// Stream of Server-Sent [`Event`]s.
 #[derive(Debug)]
-pub struct SseStream<C: Request, K = String, V = String> {
+pub struct SseStream<C: ExecuteRequest, K = String, V = String> {
     state: SseState<C::Error>,
     parser: EventParser<K, V>,
     max_retry: Option<(u64, u64)>,
@@ -513,7 +502,7 @@ pub struct SseStream<C: Request, K = String, V = String> {
     client: C,
 }
 
-impl<C: Request, K, V> SseStream<C, K, V> {
+impl<C: ExecuteRequest, K, V> SseStream<C, K, V> {
     pub fn builder<U: IntoUrl>(client: C, endpoint: U) -> SseStreamBuilder<C, K, V> {
         SseStreamBuilder::new(client, endpoint.into_url())
     }
@@ -537,8 +526,8 @@ impl<C: Request, K, V> SseStream<C, K, V> {
     }
 }
 
-impl<C: Request + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
-    type Item = Result<Event<K, V>, SseError<C::Error, K::Err, V::Err>>;
+impl<C: ExecuteRequest + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
+    type Item = SseResult<C, K, V>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
@@ -548,7 +537,7 @@ impl<C: Request + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
                 SseState::Connecting(fut) => match ready!(fut.as_mut().poll(cx)) {
                     Err(e) => {
                         this.state = SseState::Reconnecting;
-                        return Poll::Ready(Some(Err(SseError::Execute(e))));
+                        return Poll::Ready(Some(Err(SseError::ExecuteRequest(e))));
                     }
                     Ok(response) => {
                         if response.status() == StatusCode::NO_CONTENT {
@@ -610,7 +599,7 @@ impl<C: Request + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
                         Some(Ok(event)) => {
                             #[cfg(feature = "metrics")]
                             {
-                                EVENT_COUNTER
+                                metrics::SSE_EVENT_COUNTER
                                     .with_label_values(&[&this.request.url()])
                                     .inc();
                             }
@@ -646,7 +635,8 @@ impl<C: Request + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
                                 // let the server know where we stopped
                                 let _ = request.headers_mut().insert(LAST_EVENT_ID, last_event_id);
                             }
-                            this.state = SseState::Connecting(this.client.execute(request).boxed());
+                            this.state =
+                                SseState::Connecting(this.client.execute_request(request).boxed());
                         }
                     }
                 }
@@ -660,7 +650,7 @@ impl<C: Request + Unpin, K: FromStr, V: FromStr> Stream for SseStream<C, K, V> {
     }
 }
 
-impl<C: Request + Unpin, K: FromStr, V: FromStr> FusedStream for SseStream<C, K, V> {
+impl<C: ExecuteRequest + Unpin, K: FromStr, V: FromStr> FusedStream for SseStream<C, K, V> {
     fn is_terminated(&self) -> bool {
         matches!(self.state, SseState::Closed)
     }
@@ -682,7 +672,7 @@ pub struct SseStreamBuilder<C, K = String, V = String> {
 }
 
 impl<C: fmt::Debug, K, V> fmt::Debug for SseStreamBuilder<C, K, V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SseStreamBuilder")
             .field("client", &self.client)
             .field("endpoint", &self.endpoint)
@@ -766,7 +756,7 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
     #[cfg_attr(feature = "tracing", tracing::instrument)]
     pub fn stream(self) -> SseBuildResult<C, K, V>
     where
-        C: Request + fmt::Debug,
+        C: ExecuteRequest + fmt::Debug,
         K: FromStr,
         V: FromStr,
     {
@@ -785,10 +775,8 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
         let mut request = reqwest::Request::new(Method::GET, url);
 
         let headers = request.headers_mut();
-
-        let _ = headers.insert(header::ACCEPT, TEXT_EVENT_STREAM);
-
-        let _ = headers.insert(header::CACHE_CONTROL, NO_STORE);
+        let _ = headers.try_insert(header::ACCEPT, TEXT_EVENT_STREAM)?;
+        let _ = headers.try_insert(header::CACHE_CONTROL, NO_STORE)?;
 
         if let Some(last_event_id) = last_event_id.header_value() {
             let _ = headers.insert(LAST_EVENT_ID, last_event_id);
@@ -796,18 +784,17 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
 
         // TODO: request's "initiator" type should be set to "other"
 
-        let first_request = match request.try_clone() {
-            None => return Err(SseError::RequestBodyNotCloneable),
-            Some(v) => v,
-        };
+        let first_request = request
+            .try_clone()
+            .ok_or(SseError::RequestBodyNotCloneable)?;
 
         Ok(SseStream {
-            state: SseState::Connecting(client.execute(first_request).boxed()),
+            state: SseState::Connecting(client.execute_request(first_request).boxed()),
             parser: EventParser::new(
                 request.url().clone(),
                 last_event_id,
                 initial_capacity,
-                max_capacity.unwrap_or(isize::MAX as usize),
+                max_capacity.unwrap_or(MAX_CAPACITY),
             ),
             max_retry: max_retry.map(|n| (n, n)),
             max_loop: max_loop.map(|n| (n, n)),
@@ -819,7 +806,7 @@ impl<C, K, V> SseStreamBuilder<C, K, V> {
 
 // SSE CLIENT //////////////////////////////////////////////////////////////////
 
-/// Extension trait for [`Request`]s clients that support subscribing to Server-Sent Events (SSE).
+/// Extension trait for HTTP clients that support subscribing to Server-Sent Events (SSE).
 pub trait SseClient<U> {
     /// Sends a GET HTTP request to the provided `endpoint`,
     /// which is expected to serve a stream of Server-Sent Events (SSE).
@@ -834,7 +821,8 @@ pub trait SseClient<U> {
     ///
     /// You can use [`String`] to return the original, untyped values.
     ///
-    /// You can use [`Json<T>`] with any type that implements [`DeserializeOwned`](serde::de::DeserializeOwned).
+    /// With the `serde` feature enabled, you can use `Json` helper with any
+    /// type that implements [`DeserializeOwned`](serde::de::DeserializeOwned).
     /// It will handle newlines transparently.
     ///
     /// # Buffering
@@ -843,8 +831,8 @@ pub trait SseClient<U> {
     /// buffer in which incoming bytes are accumulated before they are decoded.
     fn sse<K, V>(&self, endpoint: U) -> SseStreamBuilder<Self, K, V>
     where
-        K: FromStr + fmt::Debug + Send + 'static,
-        V: FromStr + fmt::Debug + Send + 'static,
+        K: FromStr + fmt::Debug,
+        V: FromStr + fmt::Debug,
         Self: Sized;
 
     /// Same as [`sse`](SseClient::sse) but without deserializing event type and data.
@@ -856,11 +844,11 @@ pub trait SseClient<U> {
     }
 }
 
-impl<T: Request + fmt::Debug + Clone, U: IntoUrl> SseClient<U> for T {
+impl<T: ExecuteRequest + fmt::Debug + Clone, U: IntoUrl> SseClient<U> for T {
     fn sse<K, V>(&self, endpoint: U) -> SseStreamBuilder<Self, K, V>
     where
-        K: FromStr + fmt::Debug + Send + 'static,
-        V: FromStr + fmt::Debug + Send + 'static,
+        K: FromStr + fmt::Debug,
+        V: FromStr + fmt::Debug,
     {
         SseStream::builder(self.clone(), endpoint)
     }
@@ -870,7 +858,7 @@ impl<T: Request + fmt::Debug + Clone, U: IntoUrl> SseClient<U> for T {
 mod test {
     use core::{fmt, str::FromStr, time::Duration};
 
-    use url::Url;
+    use reqwest::Url;
 
     use super::{EventId, EventParser, Json};
 

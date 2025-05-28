@@ -21,18 +21,18 @@ mod sse_integration_tests {
         routing::get,
     };
     use futures::{FutureExt, Stream, StreamExt};
-    use oauth10a::client::{
-        Client,
+    use oauth10a::{
+        client::Client,
         sse::{self as sse_client, EventId, Json, SseClient},
     };
     use reqwest::StatusCode;
+    use reqwest::Url;
     use tokio::{
         net::{TcpListener, ToSocketAddrs},
         sync::broadcast::{self, error::RecvError},
         task::JoinHandle,
     };
     use tracing::debug;
-    use url::Url;
 
     type NextEventOutput = (
         Result<sse_server::Event, RecvError>,
@@ -157,7 +157,7 @@ mod sse_integration_tests {
                 .data("Message 3"),
         ];
 
-        let client = Client::default();
+        let client = Client::new();
 
         let mut event_stream = client.untyped_sse(&endpoint).max_loop(0).stream()?;
 
@@ -290,7 +290,7 @@ mod sse_integration_tests {
             ),
         ];
 
-        let client = Client::default();
+        let client = Client::new();
 
         let mut event_stream = client
             .sse::<EventKind, Json<EventValue>>(&endpoint)
@@ -349,22 +349,23 @@ mod sse_integration_tests {
 
 #[cfg(feature = "sse")]
 mod sse_e2e_tests {
+
     use anyhow::Result;
     use futures::StreamExt;
-    use oauth10a::client::{Client, Credentials, sse::SseClient};
+    use oauth10a::{client::Client, credentials::Credentials, sse::SseClient};
     use tracing::warn;
 
-    fn oath_env() -> Option<Credentials> {
+    fn oauth_env() -> Option<Credentials> {
         if let Ok(token) = std::env::var("CC_TOKEN") {
             if let Ok(secret) = std::env::var("CC_SECRET") {
                 if let Ok(consumer_key) = std::env::var("CC_CONSUMER_KEY") {
                     if let Ok(consumer_secret) = std::env::var("CC_CONSUMER_SECRET") {
-                        return Some(Credentials::OAuth1 {
+                        return Some(Credentials::oauth1_from(
                             token,
                             secret,
                             consumer_key,
                             consumer_secret,
-                        });
+                        ));
                     }
                 }
             }
@@ -376,16 +377,12 @@ mod sse_e2e_tests {
     async fn sse_e2e() -> Result<()> {
         const ENDPOINT: &str = "https://api.clever-cloud.com/v4/logs/organisations/orga_20b916c2-4ea3-49e3-bad0-0a7765ef1b25/applications/app_2dab4fd3-c2fc-4d2d-bf4a-00aaaf66ff72/logs?throttleElements=10000&throttlePerInMilliseconds=50";
 
-        let Some(credentials) = oath_env() else {
+        let Some(credentials) = oauth_env() else {
             warn!("OAuth credentials not found in environment: ignoring end-to-end tests");
             return Ok(());
         };
 
-        let client = {
-            let mut client = Client::default();
-            client.set_credentials(Some(credentials));
-            client
-        };
+        let client = Client::new().with_credentials(credentials);
 
         let mut event_stream = client
             .untyped_sse(ENDPOINT)
