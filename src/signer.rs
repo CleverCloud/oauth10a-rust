@@ -28,7 +28,7 @@ pub trait SignatureMethod {
     fn digest(key: &str, signature: &str) -> Result<String, Self::Error>;
 }
 
-// HMAX-SHA512 /////////////////////////////////////////////////////////////////
+// HMAC-SHA512 /////////////////////////////////////////////////////////////////
 
 pub type HmacSha512 = Hmac<Sha512>;
 
@@ -39,9 +39,13 @@ impl SignatureMethod for HmacSha512 {
 
     #[inline]
     fn digest(key: &str, signature: &str) -> Result<String, Self::Error> {
-        let mut hasher = Hmac::<Sha512>::new_from_slice(key.as_bytes())?;
-        hasher.update(signature.as_bytes());
-        Ok(BASE64_ENGINE.encode(hasher.finalize().into_bytes()))
+        let key = key.as_bytes();
+        let hash_value = {
+            let mut hasher = HmacSha512::new_from_slice(key)?;
+            hasher.update(signature.as_bytes());
+            hasher.finalize().into_bytes()
+        };
+        Ok(BASE64_ENGINE.encode(hash_value))
     }
 }
 

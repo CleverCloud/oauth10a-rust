@@ -157,7 +157,7 @@ mod sse_integration_tests {
                 .data("Message 3"),
         ];
 
-        let client = Client::new();
+        let client = Client::default();
 
         let mut event_stream = client.untyped_sse(&endpoint).max_loop(0).stream()?;
 
@@ -290,7 +290,7 @@ mod sse_integration_tests {
             ),
         ];
 
-        let client = Client::new();
+        let client = Client::default();
 
         let mut event_stream = client
             .sse::<EventKind, Json<EventValue>>(&endpoint)
@@ -356,18 +356,18 @@ mod sse_e2e_tests {
     use tracing::warn;
 
     fn oauth_env() -> Option<Credentials> {
-        if let Ok(token) = std::env::var("CC_TOKEN") {
-            if let Ok(secret) = std::env::var("CC_SECRET") {
-                if let Ok(consumer_key) = std::env::var("CC_CONSUMER_KEY") {
-                    if let Ok(consumer_secret) = std::env::var("CC_CONSUMER_SECRET") {
-                        return Some(Credentials::oauth1_from(
-                            token,
-                            secret,
-                            consumer_key,
-                            consumer_secret,
-                        ));
-                    }
-                }
+        if let Ok(token) = std::env::var("CLEVER_TOKEN") {
+            if let Ok(secret) = std::env::var("CLEVER_SECRET") {
+                let consumer_key = std::env::var("CLEVER_CONSUMER_KEY")
+                    .unwrap_or("T5nFjKeHH4AIlEveuGhB5S3xg8T19e".into());
+                let consumer_secret = std::env::var("CLEVER_CONSUMER_SECRET")
+                    .unwrap_or("MgVMqTr6fWlf2M0tkC2MXOnhfqBWDT".into());
+                return Some(Credentials::oauth1_from(
+                    token,
+                    secret,
+                    consumer_key,
+                    consumer_secret,
+                ));
             }
         }
         None
@@ -382,7 +382,7 @@ mod sse_e2e_tests {
             return Ok(());
         };
 
-        let client = Client::new().with_credentials(credentials);
+        let client = Client::new(reqwest::Client::new(), credentials);
 
         let mut event_stream = client
             .untyped_sse(ENDPOINT)

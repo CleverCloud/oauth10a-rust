@@ -3,19 +3,9 @@
 use core::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_ENGINE};
-use reqwest::{Method, Url, header};
+use reqwest::{Request, header};
 
 use crate::signer::{HmacSha512, SignError, Signer};
-
-// CREDENTIALS ERROR ///////////////////////////////////////////////////////////
-
-#[derive(Debug, thiserror::Error)]
-pub enum CredentialsError {
-    #[error("missing consumer key")]
-    MissingConsumerKey,
-    #[error("missing consumer secret")]
-    MissingConsumerSecret,
-}
 
 // AUTHORIZATION ERROR /////////////////////////////////////////////////////////
 
@@ -39,100 +29,10 @@ pub enum CredentialsKind {
     OAuth1,
 }
 
-// CREDENTIALS BUILDER /////////////////////////////////////////////////////////
-
-/// Utility type for handling credentials with optional consumer key and secret.
-pub type CredentialsBuilder<T = Box<str>> = Credentials<T, Option<T>>;
-
-impl<T> CredentialsBuilder<T> {
-    /// Builds the credentials, filling missing consumer data with the provided default values.
-    pub fn with_consumer(
-        self,
-        default_consumer_key: impl Into<T>,
-        default_consumer_secret: impl Into<T>,
-    ) -> Credentials<T> {
-        match self {
-            Self::Bearer { token } => Credentials::Bearer { token },
-            Self::Basic { username, password } => Credentials::Basic { username, password },
-            Self::OAuth1 {
-                token,
-                secret,
-                consumer_key,
-                consumer_secret,
-            } => Credentials::OAuth1 {
-                token,
-                secret,
-                consumer_key: consumer_key.unwrap_or_else(|| default_consumer_key.into()),
-                consumer_secret: consumer_secret.unwrap_or_else(|| default_consumer_secret.into()),
-            },
-        }
-    }
-
-    /// Builds the credentials.
-    ///
-    /// # Errors
-    ///
-    /// If one of `consumer_key` and `consumer_secret` is missing.
-    pub fn build(self) -> Result<Credentials<T>, CredentialsError> {
-        self.try_into()
-    }
-}
-
-impl<T, U: Into<T>> From<Credentials<U>> for CredentialsBuilder<T> {
-    fn from(value: Credentials<U>) -> Self {
-        match value.into() {
-            Credentials::Bearer { token } => Self::Bearer { token },
-            Credentials::Basic { username, password } => Self::Basic { username, password },
-            Credentials::OAuth1 {
-                token,
-                secret,
-                consumer_key,
-                consumer_secret,
-            } => Self::OAuth1 {
-                token,
-                secret,
-                consumer_key: Some(consumer_key),
-                consumer_secret: Some(consumer_secret),
-            },
-        }
-    }
-}
-
-impl<T, U: Into<T>> TryFrom<CredentialsBuilder<U>> for Credentials<T> {
-    type Error = CredentialsError;
-
-    fn try_from(value: CredentialsBuilder<U>) -> Result<Self, Self::Error> {
-        Ok(match value {
-            Credentials::Bearer { token } => Credentials::Bearer {
-                token: token.into(),
-            },
-            Credentials::Basic { username, password } => Credentials::Basic {
-                username: username.into(),
-                password: password.map(Into::into),
-            },
-            Credentials::OAuth1 {
-                token,
-                secret,
-                consumer_key,
-                consumer_secret,
-            } => Credentials::OAuth1 {
-                token: token.into(),
-                secret: secret.into(),
-                consumer_key: consumer_key
-                    .ok_or(CredentialsError::MissingConsumerKey)?
-                    .into(),
-                consumer_secret: consumer_secret
-                    .ok_or(CredentialsError::MissingConsumerSecret)?
-                    .into(),
-            },
-        })
-    }
-}
-
 // CREDENTIALS /////////////////////////////////////////////////////////////////
 
 /// Credentials used to authorize an HTTP request.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(untagged))]
 #[cfg_attr(feature = "zeroize", derive(zeroize::Zeroize))]
@@ -141,25 +41,49 @@ impl<T, U: Into<T>> TryFrom<CredentialsBuilder<U>> for Credentials<T> {
     zeroize(bound = "T: zeroize::Zeroize, U: zeroize::Zeroize")
 )]
 pub enum Credentials<T = Box<str>, U = T> {
-    Bearer {
-        #[cfg_attr(feature = "serde", serde(rename = "token"))]
+    OAuth1 {
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "token", alias = "oauth-token", alias = "oauth_token")
+        )]
         token: T,
+        #[cfg_attr(
+            feature = "serde",
+            serde(rename = "secret", alias = "oauth-secret", alias = "oauth_secret")
+        )]
+        secret: T,
+        #[cfg_attr(
+            feature = "serde",
+            serde(
+                rename = "consumer-key",
+                alias = "consumer_key",
+                alias = "oauth-consumer-key",
+                alias = "oauth_consumer_key",
+                default
+            )
+        )]
+        consumer_key: U,
+        #[cfg_attr(
+            feature = "serde",
+            serde(
+                rename = "consumer-secret",
+                alias = "consumer_secret",
+                alias = "oauth-consumer-secret",
+                alias = "oauth_consumer_secret",
+                default
+            )
+        )]
+        consumer_secret: U,
     },
     Basic {
         #[cfg_attr(feature = "serde", serde(rename = "username"))]
         username: T,
-        #[cfg_attr(feature = "serde", serde(rename = "password"))]
+        #[cfg_attr(feature = "serde", serde(rename = "password", default))]
         password: Option<T>,
     },
-    OAuth1 {
+    Bearer {
         #[cfg_attr(feature = "serde", serde(rename = "token"))]
         token: T,
-        #[cfg_attr(feature = "serde", serde(rename = "secret"))]
-        secret: T,
-        #[cfg_attr(feature = "serde", serde(rename = "consumer-key"))]
-        consumer_key: U,
-        #[cfg_attr(feature = "serde", serde(rename = "consumer-secret"))]
-        consumer_secret: U,
     },
 }
 
@@ -186,7 +110,7 @@ impl<T, U> Credentials<T, U> {
         Self::bearer(token.into())
     }
 
-    pub fn basic(username: T, password: Option<T>) -> Self {
+    pub const fn basic(username: T, password: Option<T>) -> Self {
         Self::Basic { username, password }
     }
 
@@ -194,7 +118,7 @@ impl<T, U> Credentials<T, U> {
         Self::basic(username.into(), password.map(Into::into))
     }
 
-    pub fn oauth1(token: T, secret: T, consumer_key: U, consumer_secret: U) -> Self {
+    pub const fn oauth1(token: T, secret: T, consumer_key: U, consumer_secret: U) -> Self {
         Self::OAuth1 {
             token,
             secret,
@@ -280,21 +204,20 @@ impl Credentials {
 }
 
 impl Credentials<&str> {
-    /// Returns the value for the `Authorization` header.
-    ///
-    /// Note: currently, only `HMAC-SHA512` signature method is supported.
-    ///
-    /// # Errors
-    ///
-    /// Upon failure to produce the header value.
     #[cfg_attr(feature = "tracing", tracing::instrument)]
-    pub fn authorization(
-        self,
-        method: &Method,
-        endpoint: &Url,
-    ) -> Result<String, AuthorizationError> {
-        Ok(match self {
-            Self::Bearer { token } => format!("Bearer {token}"),
+    pub fn authorize(&self, request: &mut Request) -> Result<bool, AuthorizationError> {
+        if request.headers().contains_key(header::AUTHORIZATION) {
+            return Ok(false);
+        }
+
+        let authorization = match *self {
+            Self::OAuth1 {
+                token,
+                secret,
+                consumer_key,
+                consumer_secret,
+            } => Signer::<HmacSha512>::new(token, secret, consumer_key, consumer_secret)?
+                .sign(request.method(), request.url())?,
             Self::Basic { username, password } => {
                 let input = if let Some(password) = password {
                     format!("{username}:{password}")
@@ -303,40 +226,18 @@ impl Credentials<&str> {
                 };
                 format!("Basic {}", BASE64_ENGINE.encode(input.as_bytes()))
             }
-            Self::OAuth1 {
-                token,
-                secret,
-                consumer_key,
-                consumer_secret,
-            } => Signer::<HmacSha512>::new(token, secret, consumer_key, consumer_secret)?
-                .sign(method, endpoint)?,
-        })
-    }
+            Self::Bearer { token } => format!("Bearer {token}"),
+        };
 
-    /// Appends an `Authorization` header to the `request`, unless it is already set.
-    ///
-    /// Returns `true` if the `Authorization` header was inserted.
-    ///
-    /// # Errors
-    ///
-    /// Upon failure to produce the header value.
-    #[cfg_attr(feature = "tracing", tracing::instrument)]
-    pub fn authorize(&self, request: &mut reqwest::Request) -> Result<bool, AuthorizationError> {
-        if !request.headers().contains_key(header::AUTHORIZATION) {
-            let authorization = self.authorization(request.method(), request.url())?;
+        let mut value = authorization.parse::<header::HeaderValue>()?;
+        value.set_sensitive(true);
 
-            let mut value = authorization.parse::<header::HeaderValue>()?;
-            value.set_sensitive(true);
+        request
+            .headers_mut()
+            .try_append(header::AUTHORIZATION, value)?;
 
-            request
-                .headers_mut()
-                .try_append(header::AUTHORIZATION, value)?;
+        trace!(request = ?request, "authorized request");
 
-            #[cfg(feature = "logging")]
-            trace!(request = ?request, "authorized request");
-
-            return Ok(true);
-        }
-        Ok(false)
+        Ok(true)
     }
 }

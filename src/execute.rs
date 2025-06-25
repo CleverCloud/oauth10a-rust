@@ -43,7 +43,6 @@ async fn execute_request(
     #[cfg(any(feature = "logging", feature = "metrics"))]
     let (endpoint, method) = (request.url().to_string(), request.method().to_string());
 
-    #[cfg(feature = "logging")]
     trace!(%endpoint, %method, "execute request");
 
     #[cfg(feature = "metrics")]
@@ -54,7 +53,6 @@ async fn execute_request(
     #[cfg(any(feature = "logging", feature = "metrics"))]
     let status_code = response.status();
 
-    #[cfg(feature = "logging")]
     trace!(
         endpoint,
         method = %method,
