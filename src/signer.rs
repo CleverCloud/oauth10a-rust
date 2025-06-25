@@ -28,7 +28,7 @@ pub trait SignatureMethod {
     fn digest(key: &str, signature: &str) -> Result<String, Self::Error>;
 }
 
-// HMAX-SHA512 /////////////////////////////////////////////////////////////////
+// HMAC-SHA512 /////////////////////////////////////////////////////////////////
 
 pub type HmacSha512 = Hmac<Sha512>;
 
