@@ -7,7 +7,6 @@
 pub use reqwest;
 pub use url;
 
-#[cfg(feature = "logging")]
 #[macro_use]
 mod logging;
 
@@ -17,6 +16,8 @@ mod metrics;
 pub mod signer;
 
 pub mod credentials;
+
+pub mod authorize;
 
 #[cfg(feature = "execute")]
 pub mod execute;
